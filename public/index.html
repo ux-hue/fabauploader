@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"/>
-<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="mobile-web-app-capable" content="yes"/>
 <meta name="theme-color" content="#FF6B35"/>
 <title>Faba•Me — Carica Audio</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"/>
@@ -258,29 +258,10 @@ input::placeholder{color:#c5bfba;font-weight:600}
     <div id="link-badge"></div>
   </div>
 
-  <!-- Step 2 — title + author -->
+  <!-- Step 2 — files -->
   <div class="step locked" id="s2">
     <div class="step-head">
       <div class="step-num">2</div>
-      <div class="step-title">Nome e titolo (per tutti i file)</div>
-    </div>
-    <div class="row2">
-      <div class="field">
-        <label class="lbl" for="inp-author">Chi sei?</label>
-        <input type="text" id="inp-author" placeholder="Nonna Maria" maxlength="40"/>
-      </div>
-      <div class="field">
-        <label class="lbl" for="inp-title">Titolo traccia</label>
-        <input type="text" id="inp-title" placeholder="La storia di..." maxlength="60"/>
-      </div>
-    </div>
-    <div class="tip" style="margin-top:12px">💡 Se carichi più file, puoi cambiare il titolo per ognuno (vedi sotto).</div>
-  </div>
-
-  <!-- Step 3 — files -->
-  <div class="step locked" id="s3">
-    <div class="step-head">
-      <div class="step-num">3</div>
       <div class="step-title">Scegli i file audio</div>
     </div>
     <div class="dropzone" id="dz" ondragover="dzOver(event)" ondragleave="dzLeave()" ondrop="dzDrop(event)">
@@ -290,6 +271,17 @@ input::placeholder{color:#c5bfba;font-weight:600}
       <div class="dz-sub">MP3 · WAV · M4A · OGG · AAC — <strong>anche più file insieme</strong></div>
     </div>
     <div class="queue" id="queue"></div>
+  </div>
+
+  <!-- Step 3 — author -->
+  <div class="step locked" id="s3">
+    <div class="step-head">
+      <div class="step-num">3</div>
+      <div class="step-title">Chi manda questi audio?</div>
+    </div>
+    <label class="lbl" for="inp-author">Il tuo nome</label>
+    <input type="text" id="inp-author" placeholder="es. Mamma, Papà, Zia Laura…" maxlength="40" autocomplete="given-name"/>
+    <div class="tip" style="margin-top:10px">💡 Il tuo nome apparirà nell'app MyFaba accanto alle tracce caricate.</div>
   </div>
 
   <!-- Step 4 — send -->
@@ -307,10 +299,11 @@ input::placeholder{color:#c5bfba;font-weight:600}
   <!-- Success -->
   <div class="success-card" id="success">
     <div class="sc-emoji">🎉</div>
-    <div class="sc-title">Tutto caricato!</div>
+    <div class="sc-title">Audio inviati!</div>
     <div class="sc-body">
-      Vai nell'app <strong>MyFaba → Faba•Me</strong> e accetta le tracce ricevute.<br><br>
-      Poi sincronizza il robottino per ascoltarle! 🔊
+      Apri l'app <strong>MyFaba → Faba•Me</strong> e accetta le tracce ricevute.<br><br>
+      <strong>Hai Faba Raccontastorie?</strong> Collega il dispositivo al PC e sincronizza tramite l'app desktop MyFaba. 🖥️<br><br>
+      <strong>Hai Faba+?</strong> La sincronizzazione avviene automaticamente via Wi-Fi. 📶
     </div>
   </div>
 
@@ -362,7 +355,6 @@ async function verifyLink() {
 
 document.getElementById('inp-link').addEventListener('keydown', e => e.key==='Enter' && verifyLink());
 document.getElementById('inp-author').addEventListener('input', checkSend);
-document.getElementById('inp-title').addEventListener('input', checkSend);
 
 /* ─── drag & drop ───────────────────────────────────────────────────────────── */
 const dz = document.getElementById('dz');
@@ -374,8 +366,7 @@ function filesChosen(inp){ addFiles(inp.files); inp.value=''; }
 function addFiles(files) {
   for (const f of files) {
     if (!f.type.startsWith('audio/') && !/\.(mp3|wav|ogg|aac|m4a|flac|opus)$/i.test(f.name)) continue;
-    // Use global title as default, user can edit per-file
-    const defaultTitle = document.getElementById('inp-title').value.trim() || f.name.replace(/\.[^.]+$/,'');
+    const defaultTitle = f.name.replace(/\.[^.]+$/,'');
     fileList.push({ file:f, title:defaultTitle, id:nextId++ , status:'wait', msg:'' });
   }
   renderQueue();
