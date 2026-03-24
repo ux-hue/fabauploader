@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="theme-color" content="#FF6B35"/>
+<title>Faba•Me — Carica Audio</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900&display=swap" rel="stylesheet"/>
+<style>
+:root {
+  --orange:#FF6B35;
+  --red:#E63946;
+  --yellow:#FFD166;
+  --green:#06D6A0;
+  --blue:#118AB2;
+  --dark:#1d1d2e;
+  --bg:#FFF7F2;
+  --card:#fff;
+  --muted:#8a8a99;
+  --border:#ede8e3;
+  --r:18px;
+}
+
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+
+body{
+  font-family:'Nunito',sans-serif;
+  background:var(--bg);
+  min-height:100vh;
+  color:var(--dark);
+}
+
+/* ── top bar ── */
+.topbar{
+  background:linear-gradient(135deg,var(--orange),var(--red));
+  padding:20px 20px 28px;
+  text-align:center;
+  position:relative;
+  overflow:hidden;
+}
+.topbar::before{
+  content:'';position:absolute;inset:0;
+  background:url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.06'%3E%3Ccircle cx='30' cy='30' r='20'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
+}
+.topbar-inner{position:relative}
+.logo{display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:6px}
+.logo-icon{font-size:32px;line-height:1}
+.logo-name{font-size:26px;font-weight:900;color:#fff;letter-spacing:-0.5px}
+.logo-name em{font-style:normal;opacity:.75}
+.tagline{font-size:13px;color:rgba(255,255,255,.82);font-weight:600}
+
+/* ── layout ── */
+.wrap{max-width:500px;margin:0 auto;padding:20px 16px 60px}
+
+/* ── steps ── */
+.step{
+  background:var(--card);
+  border-radius:var(--r);
+  padding:20px;
+  margin-bottom:14px;
+  box-shadow:0 2px 12px rgba(0,0,0,.07);
+  transition:opacity .3s,transform .3s;
+}
+.step.locked{opacity:.38;pointer-events:none}
+.step-head{
+  display:flex;align-items:center;gap:10px;
+  margin-bottom:16px;
+}
+.step-num{
+  width:28px;height:28px;border-radius:50%;
+  background:var(--orange);color:#fff;
+  font-size:13px;font-weight:900;
+  display:flex;align-items:center;justify-content:center;
+  flex-shrink:0;
+}
+.step-title{font-size:16px;font-weight:900;color:var(--dark)}
+
+/* ── inputs ── */
+label.lbl{display:block;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.07em;color:var(--muted);margin-bottom:6px}
+
+input[type=text],input[type=url]{
+  width:100%;
+  padding:13px 15px;
+  border:2px solid var(--border);
+  border-radius:12px;
+  font-family:'Nunito',sans-serif;
+  font-size:15px;font-weight:700;
+  color:var(--dark);
+  background:#fafaf8;
+  outline:none;
+  transition:border .2s,box-shadow .2s;
+}
+input:focus{border-color:var(--orange);box-shadow:0 0 0 3px rgba(255,107,53,.15);background:#fff}
+input::placeholder{color:#c5bfba;font-weight:600}
+
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.field{margin-bottom:0}
+
+/* ── button verify ── */
+.btn-verify{
+  margin-top:12px;width:100%;
+  padding:13px;border-radius:12px;border:none;
+  background:var(--blue);color:#fff;
+  font-family:'Nunito',sans-serif;font-size:15px;font-weight:800;
+  cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  transition:opacity .2s,transform .15s;
+}
+.btn-verify:active{transform:scale(.97)}
+.btn-verify:disabled{opacity:.45;cursor:not-allowed}
+
+/* ── link status ── */
+.badge{
+  margin-top:10px;padding:11px 14px;border-radius:10px;
+  font-size:13px;font-weight:700;
+  display:flex;align-items:center;gap:8px;
+  animation:fadeIn .3s ease;
+}
+.badge.ok{background:#e6faf5;color:#059669;border:1.5px solid #a7f3d0}
+.badge.err{background:#fef2f2;color:var(--red);border:1.5px solid #fecaca}
+
+/* ── dropzone ── */
+.dropzone{
+  border:2.5px dashed #d9d3cc;
+  border-radius:14px;
+  padding:30px 16px;
+  text-align:center;
+  cursor:pointer;
+  position:relative;
+  background:#fafaf8;
+  transition:all .2s;
+}
+.dropzone:hover,.dropzone.over{border-color:var(--orange);background:rgba(255,107,53,.04)}
+.dropzone input[type=file]{
+  position:absolute;inset:0;opacity:0;width:100%;height:100%;cursor:pointer;
+}
+.dz-icon{font-size:40px;margin-bottom:8px;line-height:1}
+.dz-main{font-size:16px;font-weight:800;color:var(--dark);margin-bottom:4px}
+.dz-sub{font-size:12px;color:var(--muted);font-weight:600}
+.dz-sub strong{color:var(--orange)}
+
+/* ── queue ── */
+.queue{margin-top:14px;display:flex;flex-direction:column;gap:8px}
+
+.qitem{
+  background:#f8f6f4;border-radius:12px;
+  padding:12px 14px;
+  display:grid;grid-template-columns:1fr auto;
+  align-items:center;gap:12px;
+  animation:fadeUp .3s ease;
+}
+.qitem-info{min-width:0}
+.qitem-name{font-size:14px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dark)}
+.qitem-size{font-size:11px;color:var(--muted);font-weight:600;margin-top:2px}
+
+.qitem-status{flex-shrink:0;display:flex;align-items:center;gap:6px}
+.qitem-remove{
+  width:26px;height:26px;border-radius:50%;border:none;background:#e8e4e0;
+  cursor:pointer;font-size:14px;display:flex;align-items:center;justify-content:center;
+  transition:background .15s;
+}
+.qitem-remove:hover{background:#fecaca}
+
+/* progress bar inside qitem */
+.qitem-progress{grid-column:1/-1;margin-top:4px}
+.pbar-bg{background:#e5e2de;border-radius:99px;height:6px;overflow:hidden}
+.pbar-fill{height:100%;border-radius:99px;background:linear-gradient(90deg,var(--orange),var(--red));transition:width .4s ease;width:0%}
+.pbar-label{font-size:11px;color:var(--muted);font-weight:700;margin-top:4px}
+
+/* status icons */
+.st-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.st-wait{background:#d1d5db}
+.st-ok{background:var(--green)}
+.st-err{background:var(--red)}
+
+/* ── send button ── */
+.btn-send{
+  width:100%;padding:17px;border-radius:14px;border:none;
+  background:linear-gradient(135deg,var(--orange),var(--red));
+  color:#fff;font-family:'Nunito',sans-serif;font-size:17px;font-weight:900;
+  cursor:pointer;letter-spacing:.01em;
+  display:flex;align-items:center;justify-content:center;gap:10px;
+  box-shadow:0 5px 18px rgba(230,57,70,.3);
+  transition:transform .15s,box-shadow .15s,opacity .2s;
+  margin-top:4px;
+}
+.btn-send:not(:disabled):hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(230,57,70,.4)}
+.btn-send:active{transform:scale(.97)}
+.btn-send:disabled{background:#ccc;box-shadow:none;cursor:not-allowed;opacity:.6}
+
+/* ── success card ── */
+.success-card{
+  background:linear-gradient(135deg,#06D6A0,#118AB2);
+  border-radius:var(--r);padding:30px 20px;
+  text-align:center;color:#fff;
+  margin-bottom:14px;
+  display:none;
+  animation:bounceIn .5s cubic-bezier(.68,-.55,.27,1.55) both;
+}
+.success-card.show{display:block}
+.sc-emoji{font-size:52px;margin-bottom:12px}
+.sc-title{font-size:21px;font-weight:900;margin-bottom:8px}
+.sc-body{font-size:14px;font-weight:600;opacity:.9;line-height:1.55}
+
+/* ── tips ── */
+.tip{
+  background:rgba(17,138,178,.07);
+  border-left:3px solid var(--blue);
+  border-radius:10px;padding:12px 14px;
+  font-size:12px;color:#1a6e8a;font-weight:700;line-height:1.5;
+  margin-top:10px;
+}
+
+/* ── spinner ── */
+.spin{display:inline-block;width:18px;height:18px;border:3px solid rgba(255,255,255,.3);border-top-color:#fff;border-radius:50%;animation:spin .7s linear infinite}
+
+/* ── anims ── */
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+@keyframes bounceIn{from{opacity:0;transform:scale(.6)}to{opacity:1;transform:scale(1)}}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+@media(max-width:380px){
+  .row2{grid-template-columns:1fr}
+  .logo-name{font-size:22px}
+}
+</style>
+</head>
+<body>
+
+<!-- top bar -->
+<div class="topbar">
+  <div class="topbar-inner">
+    <div class="logo">
+      <span class="logo-icon">🎵</span>
+      <span class="logo-name">Faba<em>•Me</em> Uploader</span>
+    </div>
+    <div class="tagline">Carica i tuoi audio su Faba — senza registrare dal microfono</div>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <!-- Step 1 — link -->
+  <div class="step" id="s1">
+    <div class="step-head">
+      <div class="step-num">1</div>
+      <div class="step-title">Incolla il link dall'app MyFaba</div>
+    </div>
+    <label class="lbl">Link d'invito</label>
+    <input type="url" id="inp-link" placeholder="https://studio.myfaba.com/record/…" autocomplete="off" autocorrect="off" spellcheck="false"/>
+    <div class="tip">📱 Apri <strong>MyFaba → Faba•Me → + Aggiungi traccia → Invita a registrare</strong>, poi copia il link qui.</div>
+    <button class="btn-verify" id="btn-verify" onclick="verifyLink()">
+      <span id="verify-lbl">🔗 Verifica link</span>
+    </button>
+    <div id="link-badge"></div>
+  </div>
+
+  <!-- Step 2 — title + author -->
+  <div class="step locked" id="s2">
+    <div class="step-head">
+      <div class="step-num">2</div>
+      <div class="step-title">Nome e titolo (per tutti i file)</div>
+    </div>
+    <div class="row2">
+      <div class="field">
+        <label class="lbl" for="inp-author">Chi sei?</label>
+        <input type="text" id="inp-author" placeholder="Nonna Maria" maxlength="40"/>
+      </div>
+      <div class="field">
+        <label class="lbl" for="inp-title">Titolo traccia</label>
+        <input type="text" id="inp-title" placeholder="La storia di..." maxlength="60"/>
+      </div>
+    </div>
+    <div class="tip" style="margin-top:12px">💡 Se carichi più file, puoi cambiare il titolo per ognuno (vedi sotto).</div>
+  </div>
+
+  <!-- Step 3 — files -->
+  <div class="step locked" id="s3">
+    <div class="step-head">
+      <div class="step-num">3</div>
+      <div class="step-title">Scegli i file audio</div>
+    </div>
+    <div class="dropzone" id="dz" ondragover="dzOver(event)" ondragleave="dzLeave()" ondrop="dzDrop(event)">
+      <input type="file" id="inp-files" accept="audio/*,.mp3,.wav,.m4a,.ogg,.aac" multiple onchange="filesChosen(this)"/>
+      <div class="dz-icon">🎧</div>
+      <div class="dz-main">Tocca per scegliere i file</div>
+      <div class="dz-sub">MP3 · WAV · M4A · OGG · AAC — <strong>anche più file insieme</strong></div>
+    </div>
+    <div class="queue" id="queue"></div>
+  </div>
+
+  <!-- Step 4 — send -->
+  <div class="step locked" id="s4">
+    <div class="step-head">
+      <div class="step-num">4</div>
+      <div class="step-title">Invia a Faba•Me</div>
+    </div>
+    <button class="btn-send" id="btn-send" disabled onclick="startUpload()">
+      🚀 Invia a Faba•Me
+    </button>
+    <div class="tip" style="margin-top:12px">⏳ Ogni file viene convertito e inviato uno alla volta. Tieni questa pagina aperta.</div>
+  </div>
+
+  <!-- Success -->
+  <div class="success-card" id="success">
+    <div class="sc-emoji">🎉</div>
+    <div class="sc-title">Tutto caricato!</div>
+    <div class="sc-body">
+      Vai nell'app <strong>MyFaba → Faba•Me</strong> e accetta le tracce ricevute.<br><br>
+      Poi sincronizza il robottino per ascoltarle! 🔊
+    </div>
+  </div>
+
+</div><!-- /wrap -->
+
+<script>
+/* ─── state ────────────────────────────────────────────────────────────────── */
+let shareId = null;
+let fileList = []; // [{file, title, id, status:'wait'|'uploading'|'ok'|'err', msg}]
+let uploading = false;
+let nextId = 0;
+
+/* ─── link verify ───────────────────────────────────────────────────────────── */
+async function verifyLink() {
+  const url = document.getElementById('inp-link').value.trim();
+  if (!url) return;
+
+  const btn = document.getElementById('btn-verify');
+  const lbl = document.getElementById('verify-lbl');
+  btn.disabled = true;
+  lbl.innerHTML = '<span class="spin"></span> Verifica…';
+
+  const badge = document.getElementById('link-badge');
+  badge.innerHTML = '';
+
+  try {
+    const r = await fetch('/api/validate', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({url})
+    });
+    const d = await r.json();
+
+    if (d.ok) {
+      shareId = d.shareId;
+      const exp = d.expiresLabel ? ` — scade ${d.expiresLabel}` : '';
+      badge.innerHTML = `<div class="badge ok">✅ Link valido${exp}</div>`;
+      unlock('s2'); unlock('s3'); unlock('s4');
+      checkSend();
+    } else {
+      badge.innerHTML = `<div class="badge err">❌ ${esc(d.error)}</div>`;
+    }
+  } catch(e) {
+    badge.innerHTML = `<div class="badge err">❌ Errore di rete</div>`;
+  }
+
+  btn.disabled = false;
+  lbl.textContent = '🔗 Verifica link';
+}
+
+document.getElementById('inp-link').addEventListener('keydown', e => e.key==='Enter' && verifyLink());
+document.getElementById('inp-author').addEventListener('input', checkSend);
+document.getElementById('inp-title').addEventListener('input', checkSend);
+
+/* ─── drag & drop ───────────────────────────────────────────────────────────── */
+const dz = document.getElementById('dz');
+function dzOver(e){ e.preventDefault(); dz.classList.add('over'); }
+function dzLeave(){ dz.classList.remove('over'); }
+function dzDrop(e){ e.preventDefault(); dz.classList.remove('over'); addFiles(e.dataTransfer.files); }
+function filesChosen(inp){ addFiles(inp.files); inp.value=''; }
+
+function addFiles(files) {
+  for (const f of files) {
+    if (!f.type.startsWith('audio/') && !/\.(mp3|wav|ogg|aac|m4a|flac|opus)$/i.test(f.name)) continue;
+    // Use global title as default, user can edit per-file
+    const defaultTitle = document.getElementById('inp-title').value.trim() || f.name.replace(/\.[^.]+$/,'');
+    fileList.push({ file:f, title:defaultTitle, id:nextId++ , status:'wait', msg:'' });
+  }
+  renderQueue();
+  checkSend();
+}
+
+/* ─── queue render ──────────────────────────────────────────────────────────── */
+function renderQueue() {
+  const el = document.getElementById('queue');
+  if (!fileList.length){ el.innerHTML=''; return; }
+
+  el.innerHTML = fileList.map(item => {
+    const size = (item.file.size/1024/1024).toFixed(1);
+    const dotCls = {wait:'st-wait',uploading:'st-wait',ok:'st-ok',err:'st-err'}[item.status];
+    const showRemove = item.status==='wait' && !uploading;
+    const removeBtn = showRemove
+      ? `<button class="qitem-remove" onclick="removeFile(${item.id})">✕</button>`
+      : '';
+
+    const canEditTitle = item.status === 'wait' && !uploading;
+
+    let progressHtml = '';
+    if (item.status === 'uploading') {
+      progressHtml = `<div class="qitem-progress">
+        <div class="pbar-bg"><div class="pbar-fill" id="pf-${item.id}" style="width:${item.pct||0}%"></div></div>
+        <div class="pbar-label" id="pl-${item.id}">${esc(item.msg||'In coda…')}</div>
+      </div>`;
+    } else if (item.status === 'ok') {
+      progressHtml = `<div class="qitem-progress"><div class="pbar-label" style="color:#059669">✅ Caricato!</div></div>`;
+    } else if (item.status === 'err') {
+      progressHtml = `<div class="qitem-progress"><div class="pbar-label" style="color:var(--red)">❌ ${esc(item.msg)}</div></div>`;
+    }
+
+    return `<div class="qitem" id="qi-${item.id}">
+      <div class="qitem-info">
+        <div class="qitem-name">${esc(item.file.name)}</div>
+        <div class="qitem-size">${size} MB</div>
+        ${canEditTitle ? `<input type="text" style="margin-top:8px;font-size:13px;padding:7px 10px;border-radius:8px;border:1.5px solid #ddd;font-family:Nunito,sans-serif;font-weight:700;width:100%" value="${esc(item.title)}" placeholder="Titolo" oninput="setTitle(${item.id},this.value)"/>` : `<div style="font-size:12px;color:var(--muted);margin-top:4px;font-weight:700">${esc(item.title)}</div>`}
+      </div>
+      <div class="qitem-status">
+        <span class="st-dot ${dotCls}"></span>
+        ${removeBtn}
+      </div>
+      ${progressHtml}
+    </div>`;
+  }).join('');
+}
+
+function removeFile(id) {
+  fileList = fileList.filter(f => f.id !== id);
+  renderQueue();
+  checkSend();
+}
+
+function setTitle(id, val) {
+  const item = fileList.find(f => f.id===id);
+  if (item) item.title = val;
+}
+
+/* ─── send ──────────────────────────────────────────────────────────────────── */
+function checkSend() {
+  const ok = shareId && fileList.length > 0
+    && document.getElementById('inp-author').value.trim()
+    && !uploading;
+  document.getElementById('btn-send').disabled = !ok;
+}
+
+async function startUpload() {
+  if (uploading) return;
+  uploading = true;
+  checkSend();
+
+  const author = document.getElementById('inp-author').value.trim();
+  const pending = fileList.filter(f => f.status === 'wait');
+  let allOk = true;
+
+  for (const item of pending) {
+    item.status = 'uploading';
+    item.msg = 'Conversione audio…';
+    item.pct = 10;
+    renderQueue();
+
+    // Animate progress during upload
+    const interval = setInterval(() => {
+      if (item.pct < 80) {
+        item.pct += 6 + Math.random()*8;
+        item.msg = item.pct < 35 ? 'Conversione audio…' : item.pct < 65 ? 'Invio a Faba cloud…' : 'Finalizzazione…';
+        const fill = document.getElementById(`pf-${item.id}`);
+        const lbl  = document.getElementById(`pl-${item.id}`);
+        if (fill) fill.style.width = item.pct + '%';
+        if (lbl)  lbl.textContent = item.msg;
+      }
+    }, 700);
+
+    try {
+      const fd = new FormData();
+      fd.append('shareId', shareId);
+      fd.append('author', author);
+      fd.append('title', item.title || item.file.name.replace(/\.[^.]+$/,''));
+      fd.append('audio', item.file);
+
+      const r = await fetch('/api/upload', { method:'POST', body:fd });
+      const d = await r.json();
+
+      clearInterval(interval);
+
+      if (d.ok) {
+        item.status = 'ok';
+        item.pct = 100;
+      } else {
+        item.status = 'err';
+        item.msg = d.error || 'Errore sconosciuto';
+        allOk = false;
+      }
+    } catch(e) {
+      clearInterval(interval);
+      item.status = 'err';
+      item.msg = 'Errore di rete';
+      allOk = false;
+    }
+
+    renderQueue();
+
+    // Small pause between uploads so Faba server doesn't get overwhelmed
+    if (pending.indexOf(item) < pending.length - 1) {
+      await sleep(1500);
+    }
+  }
+
+  uploading = false;
+
+  const stillWaiting = fileList.some(f => f.status === 'wait');
+  checkSend();
+
+  if (!stillWaiting && allOk) {
+    document.getElementById('success').classList.add('show');
+    document.getElementById('success').scrollIntoView({ behavior:'smooth', block:'center' });
+  }
+}
+
+/* ─── utils ─────────────────────────────────────────────────────────────────── */
+function unlock(id){ document.getElementById(id).classList.remove('locked'); }
+function esc(s=''){
+  const d=document.createElement('div'); d.textContent=String(s); return d.innerHTML;
+}
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+</script>
+</body>
+</html>
