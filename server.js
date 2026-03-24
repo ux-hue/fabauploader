@@ -155,7 +155,134 @@ async function uploadWav(actionUrl, cookie, _token, wavBuf, author, title) {
   return true;
 }
 
+/* ── YouTube via yt-dlp ───────────────────────────────────────────────────── */
+
+const { execFile, spawn } = require('child_process');
+const { promisify } = require('util');
+const execFileAsync = promisify(execFile);
+
+// Find yt-dlp binary (works on Docker + local)
+function ytdlpBin() {
+  // Try common locations
+  const candidates = [
+    '/usr/local/bin/yt-dlp',
+    '/usr/bin/yt-dlp',
+    'yt-dlp'
+  ];
+  return candidates[0]; // execFile will fail gracefully if not found
+}
+
+/** Fetch video metadata without downloading */
+async function youtubeInfo(url) {
+  const { stdout } = await execFileAsync(ytdlpBin(), [
+    '--dump-json',
+    '--no-playlist',
+    '--no-warnings',
+    url
+  ], { timeout: 30_000 });
+
+  const info = JSON.parse(stdout);
+  return {
+    title: info.title || 'Audio da YouTube',
+    duration: info.duration || 0,
+    thumbnail: info.thumbnail || null,
+    uploader: info.uploader || ''
+  };
+}
+
+/** Download audio from YouTube as a Buffer, converted to WAV via ffmpeg pipe */
+function youtubeDownload(url) {
+  return new Promise((resolve, reject) => {
+    const tmpOut = path.join(os.tmpdir(), `fab_yt_${Date.now()}.wav`);
+
+    // yt-dlp → stdout (best audio) → ffmpeg → WAV file
+    const ytdlp = spawn(ytdlpBin(), [
+      '--no-playlist',
+      '--no-warnings',
+      '-f', 'bestaudio',
+      '-o', '-',   // output to stdout
+      url
+    ]);
+
+    const ff = spawn('ffmpeg', [
+      '-i', 'pipe:0',
+      '-acodec', 'pcm_s16le',
+      '-ac', '1',
+      '-ar', '22050',
+      '-f', 'wav',
+      tmpOut
+    ]);
+
+    ytdlp.stdout.pipe(ff.stdin);
+
+    ytdlp.stderr.on('data', d => {
+      const msg = d.toString();
+      if (msg.includes('ERROR')) console.error('yt-dlp:', msg.trim());
+    });
+
+    ff.stderr.on('data', () => {}); // suppress ffmpeg verbose
+
+    ytdlp.on('error', err => reject(new Error('yt-dlp non trovato. Assicurati sia installato nel server.')));
+
+    ff.on('close', code => {
+      if (code !== 0) {
+        reject(new Error('Conversione audio YouTube fallita.'));
+        return;
+      }
+      try {
+        const buf = fs.readFileSync(tmpOut);
+        fs.unlinkSync(tmpOut);
+        resolve(buf);
+      } catch(e) {
+        reject(e);
+      }
+    });
+  });
+}
+
 /* ── API routes ───────────────────────────────────────────────────────────── */
+
+// YouTube: get video info
+app.post('/api/youtube-info', async (req, res) => {
+  const { url } = req.body;
+  if (!url || !/youtube\.com|youtu\.be/.test(url))
+    return res.status(400).json({ ok: false, error: 'URL YouTube non valido.' });
+
+  try {
+    const info = await youtubeInfo(url);
+    res.json({ ok: true, ...info });
+  } catch(e) {
+    console.error('YouTube info error:', e.message);
+    const msg = e.message.includes('not found') || e.message.includes('ENOENT')
+      ? 'yt-dlp non disponibile sul server.'
+      : 'Video non trovato o non disponibile.';
+    res.status(400).json({ ok: false, error: msg });
+  }
+});
+
+// YouTube: download + convert + upload to Faba
+app.post('/api/youtube-upload', async (req, res) => {
+  const { url, shareId, author, title } = req.body;
+
+  if (!url || !shareId || !author || !title)
+    return res.status(400).json({ ok: false, error: 'Dati mancanti.' });
+
+  try {
+    console.log(`Downloading YouTube: ${url}`);
+    const wavBuf = await youtubeDownload(url);
+    const sizeMB = (wavBuf.length / 1024 / 1024).toFixed(1);
+    console.log(`YouTube WAV size: ${sizeMB} MB`);
+
+    const { xsrf, sess, location } = await loadPage(shareId);
+    const { actionUrl, _token, cookie } = await fetchForm(xsrf, sess, location);
+    await uploadWav(actionUrl, cookie, _token, wavBuf, author, title);
+
+    res.json({ ok: true });
+  } catch(e) {
+    console.error('YouTube upload error:', e.message);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
 
 // Validate link
 app.post('/api/validate', async (req, res) => {
