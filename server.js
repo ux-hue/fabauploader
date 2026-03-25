@@ -184,56 +184,104 @@ function humanError(raw) {
 }
 
 
-/* ── YouTube — client-side download via CORS proxy ───────────────────────── */
+/* ── YouTube via @distube/ytdl-core (Android InnerTube client) ────────────── */
 //
-// The server IP (Render/AWS) gets blocked by YouTube. Solution: the browser
-// downloads from notube.net directly (its own IP), then sends the MP3 to us
-// as a normal file upload. The server only acts as a CORS proxy for the
-// notube.net API calls (which return JSON, not the heavy audio stream).
+// Uses the Android InnerTube API client which doesn't require PO tokens
+// and works from server IPs without bot detection.
 //
 
-// Proxy notube.net API calls (browser can't call it directly due to CORS)
-app.post('/api/yt-proxy', async (req, res) => {
-  const { endpoint, formBody } = req.body;
-  if (!endpoint || !endpoint.startsWith('https://notube.net/')) {
-    return res.status(400).json({ ok: false, error: 'Endpoint non valido.' });
-  }
+let ytdl;
+try {
+  ytdl = require('@distube/ytdl-core');
+} catch(e) {
+  console.warn('ytdl-core not installed, YouTube disabled');
+}
+
+// Get video info (title, thumbnail, duration) without downloading
+app.post('/api/youtube-info', async (req, res) => {
+  const { url } = req.body;
+  if (!url || !/youtube\.com|youtu\.be/.test(url))
+    return res.status(400).json({ ok: false, error: 'URL YouTube non valido.' });
+  if (!ytdl) return res.status(500).json({ ok: false, error: 'YouTube non disponibile sul server.' });
+
   try {
-    const r = await axios.post(endpoint, formBody || '', {
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Referer': 'https://notube.net/',
-        'Origin': 'https://notube.net'
-      },
-      timeout: 45_000,
-      validateStatus: () => true
+    const info = await ytdl.getBasicInfo(url, {
+      requestOptions: { headers: { 'User-Agent': 'com.google.android.youtube/19.09.37 (Linux; U; Android 11)' } }
     });
-    res.json({ ok: true, status: r.status, data: r.data });
+    const d = info.videoDetails;
+    res.json({
+      ok: true,
+      title: d.title || 'Audio da YouTube',
+      duration: parseInt(d.lengthSeconds) || 0,
+      thumbnail: d.thumbnails?.slice(-1)[0]?.url || null,
+    });
   } catch(e) {
-    console.error('yt-proxy error:', e.message);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error('yt-info error:', e.message);
+    res.status(400).json({ ok: false, error: ytHumanError(e.message) });
   }
 });
 
-// Proxy: stream an MP3 download URL back to the client (for CORS-blocked audio URLs)
-app.get('/api/yt-download', async (req, res) => {
-  const { url } = req.query;
-  if (!url) return res.status(400).send('Missing url');
+// Download audio + convert + upload to Faba (all server-side)
+app.post('/api/youtube-upload', async (req, res) => {
+  const { url, shareId, author, title } = req.body;
+  if (!url || !shareId || !author || !title)
+    return res.status(400).json({ ok: false, error: 'Dati mancanti.' });
+  if (!ytdl) return res.status(500).json({ ok: false, error: 'YouTube non disponibile sul server.' });
+
   try {
-    const r = await axios.get(decodeURIComponent(url), {
-      responseType: 'stream',
-      timeout: 120_000,
-      headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://notube.net/' }
+    console.log(`YouTube download: ${url}`);
+
+    // Stream audio directly to ffmpeg for conversion to WAV
+    const wavBuf = await new Promise((resolve, reject) => {
+      const tmpOut = path.join(os.tmpdir(), `fab_yt_${Date.now()}.wav`);
+      const stream = ytdl(url, {
+        filter: 'audioonly',
+        quality: 'lowestaudio',
+        requestOptions: { headers: { 'User-Agent': 'com.google.android.youtube/19.09.37 (Linux; U; Android 11)' } }
+      });
+
+      const { spawn } = require('child_process');
+      const ff = spawn('ffmpeg', [
+        '-i', 'pipe:0',
+        '-acodec', 'pcm_s16le', '-ac', '1', '-ar', '22050',
+        '-f', 'wav', tmpOut
+      ]);
+
+      stream.pipe(ff.stdin);
+      stream.on('error', reject);
+      ff.stderr.on('data', () => {});
+      ff.on('close', code => {
+        if (code !== 0) { reject(new Error('Conversione audio fallita.')); return; }
+        try { const buf = fs.readFileSync(tmpOut); fs.unlinkSync(tmpOut); resolve(buf); }
+        catch(e) { reject(e); }
+      });
     });
-    res.set('Content-Type', r.headers['content-type'] || 'audio/mpeg');
-    res.set('Content-Disposition', 'attachment; filename="audio.mp3"');
-    res.set('Access-Control-Allow-Origin', '*');
-    r.data.pipe(res);
+
+    const sizeMB = (wavBuf.length / 1024 / 1024).toFixed(1);
+    console.log(`YouTube WAV size: ${sizeMB} MB`);
+
+    const { xsrf, sess, location } = await loadPage(shareId);
+    const { actionUrl, _token, cookie } = await fetchForm(xsrf, sess, location);
+    const { duration } = await uploadWav(actionUrl, cookie, _token, wavBuf, author, title);
+    res.json({ ok: true, duration });
+
   } catch(e) {
-    res.status(500).send(e.message);
+    console.error('YouTube upload error:', e.message);
+    res.status(500).json({ ok: false, error: ytHumanError(e.message) });
   }
 });
+
+function ytHumanError(msg = '') {
+  const m = msg.toLowerCase();
+  if (m.includes('sign in') || m.includes('bot') || m.includes('login'))
+    return 'YouTube ha bloccato la richiesta. Il video potrebbe richiedere login o essere con restrizioni.';
+  if (m.includes('private')) return 'Il video è privato.';
+  if (m.includes('unavailable') || m.includes('not available')) return 'Il video non è disponibile.';
+  if (m.includes('copyright')) return 'Il video è bloccato per copyright.';
+  if (m.includes('age')) return 'Il video ha restrizioni di età.';
+  if (m.includes('members')) return 'Il video è riservato agli iscritti al canale.';
+  return `Impossibile scaricare il video. Prova con un altro link o carica l'MP3 manualmente.`;
+}
 
 /* ── API routes ───────────────────────────────────────────────────────────── */
 // Validate link
