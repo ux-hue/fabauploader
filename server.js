@@ -82,38 +82,20 @@ async function fetchForm(xsrf, sess, location) {
   const tokenEl   = doc.querySelector('input[name="_token"]');
   if (!actionUrl || !tokenEl) throw new Error('Token CSRF non trovato.');
 
-  // Parse expiry from action URL query string
   const parsed = new URL(actionUrl);
   const expires = parsed.searchParams.get('expires');
   const expiresMs = expires ? parseInt(expires) * 1000 : null;
 
-  // Try to extract storage limit/usage from the page (Faba exposes this as JSON in a script tag or data attrs)
+  // Try to extract storage data — Faba doesn't currently expose this in the page HTML,
+  // so usedSeconds/maxSeconds will be null for now.
   let usedSeconds = null, maxSeconds = null;
   try {
-    // Look for data embedded in script tags (e.g. window.__PROPS__ or similar)
     const scripts = [...doc.querySelectorAll('script:not([src])')].map(s => s.textContent);
     for (const src of scripts) {
-      // Try common patterns: "duration":1234, "max_duration":5400, "used":..., "limit":...
-      const mUsed = src.match(/"(?:used_duration|used|usedDuration|current_duration)"\s*:\s*(\d+)/);
-      const mMax  = src.match(/"(?:max_duration|limit|maxDuration|total_duration)"\s*:\s*(\d+)/);
+      const mUsed = src.match(/"(?:used_duration|usedDuration|current_duration)"\s*:\s*(\d+)/);
+      const mMax  = src.match(/"(?:max_duration|maxDuration|total_duration|limit)"\s*:\s*(\d+)/);
       if (mUsed) usedSeconds = parseInt(mUsed[1]);
       if (mMax)  maxSeconds  = parseInt(mMax[1]);
-    }
-    // Also look in data attributes on body/root elements
-    const body = doc.body;
-    if (body) {
-      const d = body.dataset;
-      if (d.usedDuration) usedSeconds = parseInt(d.usedDuration);
-      if (d.maxDuration)  maxSeconds  = parseInt(d.maxDuration);
-    }
-    // Log what we find for debugging
-    if (usedSeconds !== null || maxSeconds !== null) {
-      console.log(`Faba storage: used=${usedSeconds}s max=${maxSeconds}s`);
-    } else {
-      // Dump a snippet to help identify where the data lives
-      const bodyText = resp.data.slice(0, 3000);
-      const durMatch = bodyText.match(/duration[^}]{0,200}/gi);
-      if (durMatch) console.log('Faba page duration hints:', durMatch.slice(0,3));
     }
   } catch(e) { /* non-fatal */ }
 
@@ -209,84 +191,104 @@ const execFileAsync = promisify(execFile);
 
 // Find yt-dlp binary (works on Docker + local)
 function ytdlpBin() {
-  // Try common locations
-  const candidates = [
-    '/usr/local/bin/yt-dlp',
-    '/usr/bin/yt-dlp',
-    'yt-dlp'
-  ];
-  return candidates[0]; // execFile will fail gracefully if not found
+  return '/usr/local/bin/yt-dlp';
+}
+
+// Path where the user's YouTube cookies.txt is stored persistently
+const COOKIES_PATH = path.join('/tmp', 'yt_cookies.txt');
+
+// Build yt-dlp args, injecting cookies if available
+function ytdlpArgs(extra = []) {
+  const args = ['--no-playlist', '--no-warnings', ...extra];
+  if (fs.existsSync(COOKIES_PATH)) {
+    args.push('--cookies', COOKIES_PATH);
+    console.log('yt-dlp: using cookies from', COOKIES_PATH);
+  }
+  return args;
+}
+
+/** Parse yt-dlp stderr/message into a human-readable Italian error */
+function ytdlpHumanError(raw = '') {
+  const msg = raw.toLowerCase();
+  if (msg.includes('sign in') || msg.includes('bot') || msg.includes('confirm'))
+    return 'YouTube ha bloccato la richiesta (protezione anti-bot). Carica il file cookies.txt nella sezione YouTube per sbloccare il download.';
+  if (msg.includes('private'))
+    return 'Il video è privato e non può essere scaricato.';
+  if (msg.includes('not available') || msg.includes('unavailable'))
+    return 'Il video non è disponibile in questa regione o è stato rimosso.';
+  if (msg.includes('copyright'))
+    return 'Il video è bloccato per copyright.';
+  if (msg.includes('enoent') || msg.includes('not found'))
+    return 'yt-dlp non è installato sul server. Controlla il Dockerfile.';
+  if (msg.includes('members only'))
+    return 'Il video è riservato agli iscritti al canale.';
+  if (msg.includes('429') || msg.includes('too many'))
+    return 'YouTube ha limitato le richieste dal server. Riprova tra qualche minuto.';
+  return `Impossibile scaricare da YouTube: ${raw.slice(0, 150)}`;
 }
 
 /** Fetch video metadata without downloading */
 async function youtubeInfo(url) {
-  const { stdout } = await execFileAsync(ytdlpBin(), [
-    '--dump-json',
-    '--no-playlist',
-    '--no-warnings',
-    url
-  ], { timeout: 30_000 });
-
-  const info = JSON.parse(stdout);
-  return {
-    title: info.title || 'Audio da YouTube',
-    duration: info.duration || 0,
-    thumbnail: info.thumbnail || null,
-    uploader: info.uploader || ''
-  };
+  try {
+    const { stdout } = await execFileAsync(ytdlpBin(), ytdlpArgs(['--dump-json', url]), { timeout: 30_000 });
+    const info = JSON.parse(stdout);
+    return {
+      title: info.title || 'Audio da YouTube',
+      duration: info.duration || 0,
+      thumbnail: info.thumbnail || null,
+      uploader: info.uploader || ''
+    };
+  } catch(e) {
+    const combined = (e.stderr || '') + (e.message || '');
+    console.error('yt-dlp info error:', combined.slice(0, 300));
+    throw new Error(ytdlpHumanError(combined));
+  }
 }
 
-/** Download audio from YouTube as a Buffer, converted to WAV via ffmpeg pipe */
+/** Download audio from YouTube → WAV buffer */
 function youtubeDownload(url) {
   return new Promise((resolve, reject) => {
     const tmpOut = path.join(os.tmpdir(), `fab_yt_${Date.now()}.wav`);
+    let ytStderr = '';
 
-    // yt-dlp → stdout (best audio) → ffmpeg → WAV file
-    const ytdlp = spawn(ytdlpBin(), [
-      '--no-playlist',
-      '--no-warnings',
-      '-f', 'bestaudio',
-      '-o', '-',   // output to stdout
-      url
-    ]);
-
-    const ff = spawn('ffmpeg', [
-      '-i', 'pipe:0',
-      '-acodec', 'pcm_s16le',
-      '-ac', '1',
-      '-ar', '22050',
-      '-f', 'wav',
-      tmpOut
-    ]);
+    const ytdlp = spawn(ytdlpBin(), ytdlpArgs(['-f', 'bestaudio', '-o', '-', url]));
+    const ff = spawn('ffmpeg', ['-i', 'pipe:0', '-acodec', 'pcm_s16le', '-ac', '1', '-ar', '22050', '-f', 'wav', tmpOut]);
 
     ytdlp.stdout.pipe(ff.stdin);
+    ytdlp.stderr.on('data', d => { ytStderr += d.toString(); });
+    ff.stderr.on('data', () => {});
 
-    ytdlp.stderr.on('data', d => {
-      const msg = d.toString();
-      if (msg.includes('ERROR')) console.error('yt-dlp:', msg.trim());
-    });
-
-    ff.stderr.on('data', () => {}); // suppress ffmpeg verbose
-
-    ytdlp.on('error', err => reject(new Error('yt-dlp non trovato. Assicurati sia installato nel server.')));
+    ytdlp.on('error', err => reject(new Error(ytdlpHumanError(err.message))));
+    ytdlp.on('close', code => { if (code !== 0) { ff.stdin.end(); reject(new Error(ytdlpHumanError(ytStderr))); } });
 
     ff.on('close', code => {
-      if (code !== 0) {
-        reject(new Error('Conversione audio YouTube fallita.'));
-        return;
-      }
-      try {
-        const buf = fs.readFileSync(tmpOut);
-        fs.unlinkSync(tmpOut);
-        resolve(buf);
-      } catch(e) {
-        reject(e);
-      }
+      if (code !== 0) { try { fs.unlinkSync(tmpOut); } catch {} reject(new Error('Conversione audio fallita.')); return; }
+      try { const buf = fs.readFileSync(tmpOut); fs.unlinkSync(tmpOut); resolve(buf); }
+      catch(e) { reject(e); }
     });
   });
 }
 
 /* ── API routes ───────────────────────────────────────────────────────────── */
+
+// Upload YouTube cookies.txt (called once by the admin to bypass bot detection)
+const cookiesUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+app.post('/api/youtube-cookies', cookiesUpload.single('cookies'), (req, res) => {
+  if (!req.file) return res.status(400).json({ ok: false, error: 'Nessun file ricevuto.' });
+  const text = req.file.buffer.toString('utf8');
+  if (!text.includes('youtube.com') && !text.includes('# Netscape HTTP Cookie File')) {
+    return res.status(400).json({ ok: false, error: 'Il file non sembra un cookies.txt valido. Esportalo con l\'estensione "Get cookies.txt LOCALLY" da Chrome.' });
+  }
+  fs.writeFileSync(COOKIES_PATH, text);
+  console.log('YouTube cookies saved, size:', text.length);
+  res.json({ ok: true, message: 'Cookie salvati! I download YouTube dovrebbero ora funzionare.' });
+});
+
+// Check if cookies are loaded
+app.get('/api/youtube-cookies-status', (req, res) => {
+  const hasCookies = fs.existsSync(COOKIES_PATH);
+  res.json({ hasCookies });
+});
 
 // YouTube: get video info
 app.post('/api/youtube-info', async (req, res) => {
