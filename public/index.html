@@ -78,20 +78,20 @@ html,body{
   background:var(--surface);
   margin:-18px 0 0;
   border-radius:24px 24px 0 0;
-  padding:18px 24px 0;
+  padding:18px 20px 0;
   position:relative;
   z-index:10;
   flex:1;
   display:flex;
   flex-direction:column;
-  overflow:hidden; /* main scrolls inside, not the whole page */
+  overflow:hidden;
   min-height:0;
 }
 
 /* step dots row */
 .step-dots{
   display:flex;align-items:center;
-  margin-bottom:6px;
+  margin-bottom:4px;
 }
 
 /* no more step-seg wrapper — dots and lines are direct flex children */
@@ -121,25 +121,33 @@ html,body{
 .step-line.done{background:var(--c-orange)}
 .step-line.future{background:var(--border)}
 
-/* labels below dots — 4 equal columns, each label centered under its dot */
+/*
+ * Labels: mirror the EXACT same flex structure as dots.
+ * Each label is 32px wide (same as its dot), flex-shrink:0,
+ * centred under it. Lines between them are flex:1 spacers (invisible).
+ * This guarantees perfect alignment regardless of container width.
+ */
 .step-labels{
-  display:grid;
-  grid-template-columns:repeat(4, 1fr);
-  margin-bottom:16px;
+  display:flex;align-items:center;
+  margin-bottom:14px;
 }
 .step-label{
+  width:32px;flex-shrink:0;
   text-align:center;
-  font-size:11px;font-weight:800;
+  font-size:10px;font-weight:800;
+  white-space:nowrap;
   transition:color .3s;
 }
 .step-label.active{color:var(--c-orange)}
 .step-label.done{color:var(--c-orange)}
 .step-label.future{color:var(--text3)}
+/* invisible spacers between labels (same width as the dot-lines) */
+.step-label-gap{flex:1;height:0}
 
 /* ── main content — scrollable when needed, otherwise fits ── */
 .main{
   background:var(--surface);
-  padding:0 24px 80px;
+  padding:0 20px 24px;
   flex:1;
   overflow-y:auto;
   -webkit-overflow-scrolling:touch;
@@ -418,7 +426,7 @@ html,body{
 .bottom-nav{
   background:#fff;
   border-top:1px solid var(--border);
-  padding:12px 24px calc(12px + env(safe-area-inset-bottom));
+  padding:10px 20px max(14px, env(safe-area-inset-bottom));
   flex-shrink:0;
 }
 .nav-row{display:flex;gap:10px;max-width:600px;margin:0 auto}
@@ -763,13 +771,11 @@ function renderStepIndicator() {
   const dots = document.getElementById('step-dots');
   const labels = document.getElementById('step-labels');
 
-  // Dots row: each dot is in a flex row with connecting lines
-  // Use a grid approach: N dots + (N-1) lines, each dot centered over its label
+  // Dots: dot | line | dot | line | dot | line | dot
   let dotsHtml = '';
   for (let i = 1; i <= TOTAL_STEPS; i++) {
     const state = i < currentStep ? 'done' : i === currentStep ? 'active' : 'future';
     const icon = i < currentStep ? '✓' : i;
-    // Each dot gets flex:1, centered; lines fill the space between
     if (i > 1) {
       const lineState = i <= currentStep ? 'done' : 'future';
       dotsHtml += `<div class="step-line ${lineState}"></div>`;
@@ -778,11 +784,15 @@ function renderStepIndicator() {
   }
   dots.innerHTML = dotsHtml;
 
-  // Labels: one per step, same flex distribution as dots
-  labels.innerHTML = STEP_LABELS.map((l, i) => {
+  // Labels: mirror exact same structure — label | gap | label | gap | label | gap | label
+  // Each label is 32px (same as dot), gaps are flex:1 (same as lines) — perfect alignment
+  let labelsHtml = '';
+  for (let i = 0; i < TOTAL_STEPS; i++) {
     const state = (i+1) < currentStep ? 'done' : (i+1) === currentStep ? 'active' : 'future';
-    return `<span class="step-label ${state}">${l}</span>`;
-  }).join('');
+    if (i > 0) labelsHtml += `<div class="step-label-gap"></div>`;
+    labelsHtml += `<span class="step-label ${state}">${STEP_LABELS[i]}</span>`;
+  }
+  labels.innerHTML = labelsHtml;
 }
 
 /* ══════════════════════════════════════════════════════
@@ -1064,6 +1074,109 @@ function dragEnd() {
 /* ── YouTube ── */
 function toggleYt() { document.getElementById('yt-panel').classList.toggle('open'); }
 
+/* ── YouTube — client-side via notube.net ─────────────────────────────────── */
+//
+// Flow: checkYt → calls notube step1 (get token) → step2 (get download URL)
+//       addFromYoutube → adds to queue with downloadUrl stored
+//       during upload: browser fetches MP3 via /api/yt-download proxy,
+//       converts to File, sends to /api/upload like a normal file
+//
+
+async function notubeSearch(youtubeUrl) {
+  // Step 1: POST to notube search endpoint
+  const step1 = await fetch('/api/yt-proxy', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      endpoint: 'https://notube.net/api/ajaxSearch/index',
+      formBody: `q=${encodeURIComponent(youtubeUrl)}&vt=mp3`
+    })
+  });
+  const s1 = await step1.json();
+  if (!s1.ok || !s1.data) throw new Error('Notube non risponde (step 1)');
+
+  const data1 = s1.data;
+  if (data1.status !== 'ok' || !data1.data) {
+    throw new Error(data1.mess || data1.message || 'Video non trovato su notube');
+  }
+
+  // Parse HTML to get fid and title
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(data1.data, 'text/html');
+
+  // Title: try multiple selectors
+  const titleEl = doc.querySelector('.title, h3, .video-title, .vid-title, [class*="title"]');
+  const title = titleEl?.textContent?.trim() || 'Audio da YouTube';
+
+  // Thumbnail
+  const thumbEl = doc.querySelector('img.thumbnail, .thumbnail img, img[src*="ytimg"], img[src*="hqdefault"], img');
+  const thumbnail = thumbEl?.src || null;
+
+  // fid: try many patterns used by notube over time
+  let fid = null;
+
+  // Pattern 1: data-fid attribute
+  fid = fid || doc.querySelector('[data-fid]')?.getAttribute('data-fid');
+
+  // Pattern 2: href containing fid=
+  if (!fid) {
+    const fidLink = doc.querySelector('a[href*="fid="]');
+    fid = fidLink?.href?.match(/fid=([^&]+)/)?.[1] ||
+          fidLink?.getAttribute('href')?.match(/fid=([^&]+)/)?.[1];
+  }
+
+  // Pattern 3: any element with id containing a hash-like value
+  if (!fid) {
+    const btn = doc.querySelector('button[data-id], [data-id]');
+    fid = btn?.getAttribute('data-id');
+  }
+
+  // Pattern 4: onclick attribute
+  if (!fid) {
+    const onclickEl = [...doc.querySelectorAll('[onclick]')]
+      .find(el => el.getAttribute('onclick')?.includes('fid'));
+    const m = onclickEl?.getAttribute('onclick')?.match(/['"]([\w-]{10,})['"]/);
+    fid = m?.[1];
+  }
+
+  // Pattern 5: look in raw HTML for fid pattern
+  if (!fid) {
+    const m = data1.data.match(/['"?&]fid[=:]['"]?([\w-]{10,})/i);
+    fid = m?.[1];
+  }
+
+  // Pattern 6: look for any hash-like string after "fid"
+  if (!fid) {
+    const m = data1.data.match(/fid[^a-zA-Z0-9]+([\w]{15,})/i);
+    fid = m?.[1];
+  }
+
+  console.debug('notube parsed fid:', fid, '| title:', title);
+
+  if (!fid) {
+    // Log raw HTML snippet for debugging
+    console.debug('notube raw HTML (first 800 chars):', data1.data.replace(/\s+/g,' ').slice(0,800));
+    throw new Error('Link di download non trovato. Il video potrebbe non essere disponibile su notube.');
+  }
+
+  // Step 2: convert to get actual download URL
+  const step2 = await fetch('/api/yt-proxy', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      endpoint: 'https://notube.net/api/ajaxConvert/convert',
+      formBody: `fid=${encodeURIComponent(fid)}`
+    })
+  });
+  const s2 = await step2.json();
+  if (!s2.ok) throw new Error('Notube non risponde (step 2)');
+
+  const data2 = s2.data;
+  if (!data2 || data2.status !== 'ok' || !data2.downloadUrl) {
+    throw new Error(data2?.mess || 'Conversione fallita — il video potrebbe essere protetto da copyright o non disponibile.');
+  }
+
+  return { title, thumbnail, downloadUrl: data2.downloadUrl };
+}
+
 async function checkYt() {
   const url = document.getElementById('yt-url').value.trim();
   if (!url) return;
@@ -1071,35 +1184,26 @@ async function checkYt() {
   const wrap = document.getElementById('yt-preview-wrap');
   btn.disabled = true;
   btn.innerHTML = '<span class="spin-sm"></span>';
-  wrap.innerHTML = `<div class="yt-loading">🔍 Recupero informazioni video…</div>`;
+  wrap.innerHTML = `<div class="yt-loading">🔍 Ricerca su notube.net…</div>`;
   ytInfo = null;
 
   try {
-    const r = await fetch('/api/youtube-info', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url })
-    });
-    const d = await r.json();
-    if (!d.ok) {
-      wrap.innerHTML = `<div class="badge err" style="margin:0">❌ ${esc(d.error)}</div>`;
-      document.getElementById('yt-help').classList.add('show');
-    } else {
-      ytInfo = { ...d, url };
-      const dur = d.duration ? fmtTime(d.duration) : '';
-      wrap.innerHTML = `
-        <div class="yt-preview">
-          ${d.thumbnail ? `<img class="yt-thumb" src="${esc(d.thumbnail)}" onerror="this.style.display='none'"/>` : ''}
-          <div class="yt-meta">
-            <div class="yt-vtitle">${esc(d.title)}</div>
-            ${dur ? `<div class="yt-vdur">⏱ ${dur}</div>` : ''}
-          </div>
+    const info = await notubeSearch(url);
+    ytInfo = { ...info, url };
+    wrap.innerHTML = `
+      <div class="yt-preview">
+        ${info.thumbnail ? `<img class="yt-thumb" src="${esc(info.thumbnail)}" onerror="this.style.display='none'"/>` : '<div class="yt-thumb" style="background:#e2e8f0;display:flex;align-items:center;justify-content:center;font-size:22px">🎵</div>'}
+        <div class="yt-meta">
+          <div class="yt-vtitle">${esc(info.title)}</div>
+          <div class="yt-vdur" style="color:#059669;font-size:12px;margin-top:4px">✅ Pronto per il download</div>
         </div>
-        <label class="field-label" style="margin-top:10px">Titolo su Faba</label>
-        <input class="inp" type="text" id="yt-custom-title" value="${esc(d.title)}" maxlength="60" style="margin-bottom:10px;padding:11px 14px;font-size:14px"/>
-        <button class="yt-add-btn" onclick="addFromYoutube()">➕ Aggiungi alla coda</button>`;
-    }
+      </div>
+      <label class="field-label" style="margin-top:10px">Titolo su Faba</label>
+      <input class="inp" type="text" id="yt-custom-title" value="${esc(info.title)}" maxlength="60" style="margin-bottom:10px;padding:11px 14px;font-size:14px"/>
+      <button class="yt-add-btn" onclick="addFromYoutube()">➕ Aggiungi alla coda</button>`;
   } catch (e) {
-    wrap.innerHTML = `<div class="badge err" style="margin:0">❌ Errore di rete</div>`;
+    wrap.innerHTML = `<div class="badge err" style="margin:0">❌ ${esc(e.message)}</div>`;
+    document.getElementById('yt-help').classList.add('show');
   }
   btn.disabled = false;
   btn.textContent = '🔍 Cerca';
@@ -1109,7 +1213,8 @@ async function addFromYoutube() {
   if (!ytInfo) return;
   const title = document.getElementById('yt-custom-title')?.value.trim() || ytInfo.title;
   fileList.push({
-    isYoutube: true, youtubeUrl: ytInfo.url,
+    isYoutube: true,
+    youtubeDownloadUrl: ytInfo.downloadUrl, // the notube MP3 URL
     file: { name: title + ' (YouTube)', size: 0 },
     title, id: nextId++, status: 'wait', msg: ''
   });
@@ -1120,19 +1225,9 @@ async function addFromYoutube() {
 }
 
 async function uploadCookies(inp) {
-  const file = inp.files[0];
-  if (!file) return;
+  // cookies no longer needed — keeping stub for UI compatibility
   const result = document.getElementById('cookies-result');
-  result.innerHTML = `<span style="font-size:12px;color:var(--text3)">Caricamento…</span>`;
-  const fd = new FormData();
-  fd.append('cookies', file);
-  try {
-    const r = await fetch('/api/youtube-cookies', { method: 'POST', body: fd });
-    const d = await r.json();
-    result.innerHTML = d.ok
-      ? `<div class="badge ok" style="margin:0">✅ ${esc(d.message)}</div>`
-      : `<div class="badge err" style="margin:0">❌ ${esc(d.error)}</div>`;
-  } catch (e) { result.innerHTML = `<div class="badge err" style="margin:0">❌ Errore di rete</div>`; }
+  result.innerHTML = `<div class="badge ok" style="margin:0">ℹ️ Il download ora avviene tramite notube.net, i cookie non sono necessari.</div>`;
   inp.value = '';
 }
 
@@ -1191,11 +1286,14 @@ async function startUpload() {
 
     const isYt = !!item.isYoutube;
     const interval = setInterval(() => {
-      if (item.pct < 80) {
-        item.pct += 6 + Math.random() * 8;
-        item.msg = isYt
-          ? (item.pct < 25 ? 'Connessione YouTube…' : item.pct < 55 ? 'Download audio…' : item.pct < 75 ? 'Conversione…' : 'Invio a Faba…')
-          : (item.pct < 35 ? 'Conversione audio…' : item.pct < 65 ? 'Invio a Faba cloud…' : 'Finalizzazione…');
+      if (item.pct < 65) {
+        item.pct += 4 + Math.random() * 6;
+        if (isYt) {
+          // YouTube messages set manually at key steps — interval only fills gaps
+          if (item.pct < 30 && item.msg !== 'Download da notube…') item.msg = 'Download da notube…';
+        } else {
+          item.msg = item.pct < 35 ? 'Conversione audio…' : item.pct < 65 ? 'Invio a Faba cloud…' : 'Finalizzazione…';
+        }
         document.getElementById(`pf-${item.id}`)?.style.setProperty('width', item.pct + '%');
         const lbl = document.getElementById(`pl-${item.id}`);
         if (lbl) lbl.textContent = item.msg;
@@ -1205,10 +1303,25 @@ async function startUpload() {
     try {
       let r;
       if (isYt) {
-        r = await fetch('/api/youtube-upload', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: item.youtubeUrl, shareId, author, title: item.title })
-        });
+        // Download MP3 via proxy (browser-side), then upload as normal file
+        item.msg = 'Download da notube…'; item.pct = 15;
+        renderUploadQueue();
+
+        const proxyUrl = `/api/yt-download?url=${encodeURIComponent(item.youtubeDownloadUrl)}`;
+        const mp3Resp = await fetch(proxyUrl);
+        if (!mp3Resp.ok) throw new Error(`Download fallito (${mp3Resp.status})`);
+        const mp3Blob = await mp3Resp.blob();
+        const mp3File = new File([mp3Blob], (item.title || 'audio') + '.mp3', { type: 'audio/mpeg' });
+
+        item.msg = 'Invio a Faba…'; item.pct = 70;
+        renderUploadQueue();
+
+        const fd = new FormData();
+        fd.append('shareId', shareId);
+        fd.append('author', author);
+        fd.append('title', item.title);
+        fd.append('audio', mp3File);
+        r = await fetch('/api/upload', { method: 'POST', body: fd });
       } else {
         const fd = new FormData();
         fd.append('shareId', shareId);
