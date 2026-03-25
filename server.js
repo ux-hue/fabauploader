@@ -74,11 +74,12 @@ async function fetchForm(xsrf, sess, location) {
   });
 
   const dom  = new JSDOM(resp.data);
-  const form = dom.window.document.getElementById('form');
+  const doc  = dom.window.document;
+  const form = doc.getElementById('form');
   if (!form) throw new Error('Form non trovato. Il link è scaduto.');
 
   const actionUrl = form.getAttribute('action');
-  const tokenEl   = dom.window.document.querySelector('input[name="_token"]');
+  const tokenEl   = doc.querySelector('input[name="_token"]');
   if (!actionUrl || !tokenEl) throw new Error('Token CSRF non trovato.');
 
   // Parse expiry from action URL query string
@@ -86,7 +87,37 @@ async function fetchForm(xsrf, sess, location) {
   const expires = parsed.searchParams.get('expires');
   const expiresMs = expires ? parseInt(expires) * 1000 : null;
 
-  return { actionUrl, _token: tokenEl.value, cookie, expiresMs };
+  // Try to extract storage limit/usage from the page (Faba exposes this as JSON in a script tag or data attrs)
+  let usedSeconds = null, maxSeconds = null;
+  try {
+    // Look for data embedded in script tags (e.g. window.__PROPS__ or similar)
+    const scripts = [...doc.querySelectorAll('script:not([src])')].map(s => s.textContent);
+    for (const src of scripts) {
+      // Try common patterns: "duration":1234, "max_duration":5400, "used":..., "limit":...
+      const mUsed = src.match(/"(?:used_duration|used|usedDuration|current_duration)"\s*:\s*(\d+)/);
+      const mMax  = src.match(/"(?:max_duration|limit|maxDuration|total_duration)"\s*:\s*(\d+)/);
+      if (mUsed) usedSeconds = parseInt(mUsed[1]);
+      if (mMax)  maxSeconds  = parseInt(mMax[1]);
+    }
+    // Also look in data attributes on body/root elements
+    const body = doc.body;
+    if (body) {
+      const d = body.dataset;
+      if (d.usedDuration) usedSeconds = parseInt(d.usedDuration);
+      if (d.maxDuration)  maxSeconds  = parseInt(d.maxDuration);
+    }
+    // Log what we find for debugging
+    if (usedSeconds !== null || maxSeconds !== null) {
+      console.log(`Faba storage: used=${usedSeconds}s max=${maxSeconds}s`);
+    } else {
+      // Dump a snippet to help identify where the data lives
+      const bodyText = resp.data.slice(0, 3000);
+      const durMatch = bodyText.match(/duration[^}]{0,200}/gi);
+      if (durMatch) console.log('Faba page duration hints:', durMatch.slice(0,3));
+    }
+  } catch(e) { /* non-fatal */ }
+
+  return { actionUrl, _token: tokenEl.value, cookie, expiresMs, usedSeconds, maxSeconds };
 }
 
 /** Convert any audio → WAV (22050 Hz mono, pcm_s16le) to keep file small */
@@ -146,13 +177,28 @@ async function uploadWav(actionUrl, cookie, _token, wavBuf, author, title) {
       Referer: 'https://studio.myfaba.com/' },
     maxContentLength: Infinity,
     maxBodyLength: Infinity,
-    timeout: 120_000
+    timeout: 120_000,
+    validateStatus: () => true
   });
 
-  if (resp.status < 200 || resp.status >= 400)
-    throw new Error(`Upload rifiutato dal server Faba (HTTP ${resp.status})`);
+  if (resp.status === 403) throw new Error('STORAGE_FULL');
+  if (resp.status === 422) throw new Error('DURATION_EXCEEDED');
+  if (resp.status === 413) throw new Error('FILE_TOO_LARGE');
+  if (resp.status < 200 || resp.status >= 400) throw new Error(`FABA_ERROR_${resp.status}`);
 
-  return true;
+  return { duration };
+}
+
+/* ── human-readable error mapper ─────────────────────────────────────────── */
+function humanError(raw) {
+  const map = {
+    'STORAGE_FULL':      'Spazio esaurito 🔴 — hai raggiunto il limite massimo di minuti del tuo Faba•Me. Vai sull\'app MyFaba, seleziona il personaggio e rimuovi alcune tracce per liberare spazio, poi riprova.',
+    'DURATION_EXCEEDED': 'Spazio insufficiente 🟡 — questo file è più lungo dello spazio rimanente. Prova con un file più corto oppure libera spazio nell\'app MyFaba.',
+    'FILE_TOO_LARGE':    'File troppo grande anche dopo la conversione. Prova a spezzarlo in più parti (max ~60 min per traccia).',
+  };
+  if (map[raw]) return map[raw];
+  if (raw.startsWith('FABA_ERROR_')) return `Errore dal server Faba (codice ${raw.replace('FABA_ERROR_','')}) — riprova tra qualche secondo.`;
+  return raw;
 }
 
 /* ── YouTube via yt-dlp ───────────────────────────────────────────────────── */
@@ -280,7 +326,7 @@ app.post('/api/youtube-upload', async (req, res) => {
     res.json({ ok: true });
   } catch(e) {
     console.error('YouTube upload error:', e.message);
-    res.status(500).json({ ok: false, error: e.message });
+    res.status(500).json({ ok: false, error: humanError(e.message) });
   }
 });
 
@@ -291,14 +337,14 @@ app.post('/api/validate', async (req, res) => {
 
   try {
     const { xsrf, sess, location } = await loadPage(shareId);
-    const { expiresMs } = await fetchForm(xsrf, sess, location);
+    const { expiresMs, usedSeconds, maxSeconds } = await fetchForm(xsrf, sess, location);
 
     let expiresLabel = null;
     if (expiresMs) {
       const d = new Date(expiresMs);
       expiresLabel = d.toLocaleString('it-IT', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
     }
-    res.json({ ok: true, shareId, expiresLabel });
+    res.json({ ok: true, shareId, expiresLabel, usedSeconds, maxSeconds });
   } catch (e) {
     res.status(400).json({ ok: false, error: e.message });
   }
@@ -312,23 +358,21 @@ app.post('/api/upload', upload.single('audio'), async (req, res) => {
     return res.status(400).json({ ok: false, error: 'Dati mancanti.' });
 
   try {
-    // Fresh auth for each file (so multiupload works — same link, re-auth each time)
     const { xsrf, sess, location } = await loadPage(shareId);
     const { actionUrl, _token, cookie } = await fetchForm(xsrf, sess, location);
 
-    // Convert to compact WAV
     const isWav = /\.wav$/i.test(req.file.originalname);
     const wavBuf = isWav ? req.file.buffer : await convertToWav(req.file.buffer, req.file.originalname);
 
     const sizeMB = (wavBuf.length / 1024 / 1024).toFixed(1);
     console.log(`Uploading "${title}" – WAV size: ${sizeMB} MB`);
 
-    await uploadWav(actionUrl, cookie, _token, wavBuf, author, title);
-    res.json({ ok: true });
+    const { duration } = await uploadWav(actionUrl, cookie, _token, wavBuf, author, title);
+    res.json({ ok: true, duration });
 
   } catch (e) {
     console.error('Upload error:', e.message);
-    res.status(500).json({ ok: false, error: e.message });
+    res.status(500).json({ ok: false, error: humanError(e.message) });
   }
 });
 
