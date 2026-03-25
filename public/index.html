@@ -37,17 +37,18 @@ html,body{
   font-family:'Nunito',sans-serif;
   background:var(--bg);
   color:var(--text);
-  min-height:100vh;
-  overflow-x:hidden;
+  height:100%;
+  overflow:hidden; /* prevent page scroll — each step fits the screen */
 }
 
-/* ── header ── */
+/* ── header — compact ── */
 .header{
   background:linear-gradient(160deg,var(--c-orange) 0%,var(--c-red) 100%);
-  padding:20px 20px 40px;
+  padding:14px 20px 32px;
   text-align:center;
   position:relative;
   overflow:hidden;
+  flex-shrink:0;
 }
 .header::before{
   content:'';position:absolute;inset:0;
@@ -55,24 +56,36 @@ html,body{
 }
 .header-inner{position:relative;z-index:1}
 .logo-row{
-  display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:4px;
+  display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:3px;
 }
-.logo-sparkle{font-size:20px;color:rgba(255,255,255,.85)}
+.logo-sparkle{font-size:18px;color:rgba(255,255,255,.9)}
 .logo-name{
-  font-size:20px;font-weight:900;color:#fff;letter-spacing:-.2px;
-  font-family:'Nunito',sans-serif;
+  font-size:18px;font-weight:900;color:#fff;letter-spacing:-.2px;
 }
-.header-sub{font-size:13px;color:rgba(255,255,255,.75);font-weight:600}
+.header-sub{font-size:12px;color:rgba(255,255,255,.75);font-weight:600}
 
-/* ── step rail — card that slides up over header ── */
+/* ── full-screen flex layout ── */
+.app{
+  display:flex;
+  flex-direction:column;
+  height:100dvh;
+  height:100vh; /* fallback */
+  overflow:hidden;
+}
+
+/* ── step rail + main — scrollable container ── */
 .step-rail{
   background:var(--surface);
-  margin:-20px 0 0;
+  margin:-18px 0 0;
   border-radius:24px 24px 0 0;
-  padding:20px 24px 0;
+  padding:18px 24px 0;
   position:relative;
   z-index:10;
-  min-height:calc(100vh - 90px);
+  flex:1;
+  display:flex;
+  flex-direction:column;
+  overflow:hidden; /* main scrolls inside, not the whole page */
+  min-height:0;
 }
 
 /* step dots row */
@@ -80,8 +93,8 @@ html,body{
   display:flex;align-items:center;
   margin-bottom:6px;
 }
-.step-seg{flex:1;display:flex;align-items:center}
 
+/* no more step-seg wrapper — dots and lines are direct flex children */
 .step-dot{
   width:32px;height:32px;border-radius:50%;
   display:flex;align-items:center;justify-content:center;
@@ -104,17 +117,18 @@ html,body{
   color:var(--text3);
 }
 
-.step-line{flex:1;height:1.5px;margin:0 3px;transition:background .4s}
+.step-line{flex:1;height:1.5px;margin:0 4px;transition:background .4s}
 .step-line.done{background:var(--c-orange)}
 .step-line.future{background:var(--border)}
 
-/* labels below dots */
+/* labels below dots — 4 equal columns, each label centered under its dot */
 .step-labels{
-  display:flex;
+  display:grid;
+  grid-template-columns:repeat(4, 1fr);
   margin-bottom:16px;
 }
 .step-label{
-  flex:1;text-align:center;
+  text-align:center;
   font-size:11px;font-weight:800;
   transition:color .3s;
 }
@@ -122,11 +136,14 @@ html,body{
 .step-label.done{color:var(--c-orange)}
 .step-label.future{color:var(--text3)}
 
-/* ── main content ── */
+/* ── main content — scrollable when needed, otherwise fits ── */
 .main{
   background:var(--surface);
-  padding:0 24px 130px;
-  min-height:60vh;
+  padding:0 24px 80px;
+  flex:1;
+  overflow-y:auto;
+  -webkit-overflow-scrolling:touch;
+  min-height:0;
 }
 
 /* ── step panels ── */
@@ -141,8 +158,8 @@ html,body{
 @keyframes slideIn{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:translateX(0)}}
 @keyframes slideBack{from{opacity:0;transform:translateX(-30px)}to{opacity:1;transform:translateX(0)}}
 
-.panel-title{font-size:22px;font-weight:900;margin-bottom:6px;margin-top:20px;line-height:1.2}
-.panel-sub{font-size:14px;color:var(--text2);font-weight:600;line-height:1.4;margin-bottom:20px}
+.panel-title{font-size:22px;font-weight:900;margin-bottom:5px;margin-top:14px;line-height:1.2}
+.panel-sub{font-size:13px;color:var(--text2);font-weight:600;line-height:1.4;margin-bottom:16px}
 
 /* verify link button — full gradient, same as action */
 .btn-verify-link{
@@ -399,11 +416,10 @@ html,body{
 
 /* ── bottom nav ── */
 .bottom-nav{
-  position:fixed;bottom:0;left:0;right:0;
   background:#fff;
   border-top:1px solid var(--border);
   padding:12px 24px calc(12px + env(safe-area-inset-bottom));
-  z-index:100;
+  flex-shrink:0;
 }
 .nav-row{display:flex;gap:10px;max-width:600px;margin:0 auto}
 
@@ -467,9 +483,9 @@ html,body{
 /* ── success screen ── */
 .success-screen{
   display:none;
-  min-height:calc(100vh - 200px);
   flex-direction:column;align-items:center;justify-content:center;
-  text-align:center;padding:40px 20px 80px;
+  text-align:center;padding:20px 20px 20px;
+  flex:1;
   animation:bounceIn .5s cubic-bezier(.68,-.55,.27,1.55) both;
 }
 .success-screen.show{display:flex}
@@ -524,15 +540,16 @@ html,body{
 </style>
 </head>
 <body>
+<div class="app">
 
 <!-- ── HEADER ── -->
 <header class="header">
   <div class="header-inner">
     <div class="logo-row">
-      <span class="logo-sparkle">✦</span>
+      <span class="logo-sparkle">🤖</span>
       <span class="logo-name">Faba+Me Uploader</span>
     </div>
-    <p class="header-sub">Carica canzoni su Faba — facile e veloce</p>
+    <p class="header-sub">Carica i tuoi audio su Faba — senza registrare dal microfono</p>
   </div>
 </header>
 
@@ -540,22 +557,21 @@ html,body{
 <div class="step-rail">
   <div class="step-dots" id="step-dots"></div>
   <div class="step-labels" id="step-labels"></div>
-</div>
 
-<!-- ── MAIN ── -->
-<div class="main" id="main">
+  <!-- ── MAIN ── -->
+  <div class="main" id="main">
 
-  <!-- SUCCESS screen (shown after all uploads done) -->
-  <div class="success-screen" id="success-screen">
-    <div class="success-orb">🎉</div>
-    <h2 class="success-title">Audio inviati!</h2>
-    <p class="success-body">
-      Apri l'app <strong>MyFaba → Faba•Me</strong> e accetta le tracce.<br><br>
-      <strong>Faba Raccontastorie</strong> — collega al PC e sincronizza tramite l'app desktop. 🖥️<br>
-      <strong>Faba+</strong> — sincronizzazione automatica Wi-Fi. 📶
-    </p>
-    <button class="btn-more" onclick="resetForMore()">➕ Carica altri audio</button>
-  </div>
+    <!-- SUCCESS screen (shown after all uploads done) -->
+    <div class="success-screen" id="success-screen">
+      <div class="success-orb">🎉</div>
+      <h2 class="success-title">Audio inviati!</h2>
+      <p class="success-body">
+        Apri l'app <strong>MyFaba → Faba•Me</strong> e accetta le tracce.<br><br>
+        <strong>Faba Raccontastorie</strong> — collega al PC e sincronizza tramite l'app desktop. 🖥️<br>
+        <strong>Faba+</strong> — sincronizzazione automatica Wi-Fi. 📶
+      </p>
+      <button class="btn-more" onclick="resetForMore()">➕ Carica altri audio</button>
+    </div>
 
   <!-- STEP 1 — link -->
   <div class="step-panel" id="panel-1">
@@ -706,17 +722,20 @@ html,body{
     </div>
   </div>
 
-</div><!-- /main -->
+  </div><!-- /main -->
 
-<!-- ── BOTTOM NAV ── -->
-<div class="bottom-nav">
-  <div class="nav-row">
-    <button class="btn-back" id="btn-back" onclick="goBack()" style="display:none">←</button>
-    <button class="btn-next" id="btn-next" onclick="goNext()" disabled>
-      <span id="btn-next-lbl">Avanti</span> →
-    </button>
+  <!-- ── BOTTOM NAV ── -->
+  <div class="bottom-nav">
+    <div class="nav-row">
+      <button class="btn-back" id="btn-back" onclick="goBack()" style="display:none">←</button>
+      <button class="btn-next" id="btn-next" onclick="goNext()" disabled>
+        <span id="btn-next-lbl">Avanti</span>
+      </button>
+    </div>
   </div>
-</div>
+
+</div><!-- /step-rail -->
+</div><!-- /app -->
 
 <script>
 /* ══════════════════════════════════════════════════════
@@ -744,17 +763,22 @@ function renderStepIndicator() {
   const dots = document.getElementById('step-dots');
   const labels = document.getElementById('step-labels');
 
+  // Dots row: each dot is in a flex row with connecting lines
+  // Use a grid approach: N dots + (N-1) lines, each dot centered over its label
   let dotsHtml = '';
   for (let i = 1; i <= TOTAL_STEPS; i++) {
     const state = i < currentStep ? 'done' : i === currentStep ? 'active' : 'future';
     const icon = i < currentStep ? '✓' : i;
-    dotsHtml += `<div class="step-seg">
-      <div class="step-dot ${state}">${icon}</div>
-      ${i < TOTAL_STEPS ? `<div class="step-line ${i < currentStep ? 'done' : 'future'}"></div>` : ''}
-    </div>`;
+    // Each dot gets flex:1, centered; lines fill the space between
+    if (i > 1) {
+      const lineState = i <= currentStep ? 'done' : 'future';
+      dotsHtml += `<div class="step-line ${lineState}"></div>`;
+    }
+    dotsHtml += `<div class="step-dot ${state}">${icon}</div>`;
   }
   dots.innerHTML = dotsHtml;
 
+  // Labels: one per step, same flex distribution as dots
   labels.innerHTML = STEP_LABELS.map((l, i) => {
     const state = (i+1) < currentStep ? 'done' : (i+1) === currentStep ? 'active' : 'future';
     return `<span class="step-label ${state}">${l}</span>`;
@@ -1222,7 +1246,9 @@ async function startUpload() {
     await sleep(800);
     document.getElementById('main').querySelectorAll('.step-panel').forEach(p => p.classList.remove('active'));
     document.getElementById('success-screen').classList.add('show');
-    document.getElementById('bottom-nav') && (document.querySelector('.bottom-nav').style.display = 'none');
+    // hide nav buttons on success
+    document.getElementById('btn-next').style.display = 'none';
+    document.getElementById('btn-back').style.display = 'none';
   } else {
     if (spinner) spinner.style.display = 'none';
     upTitle.textContent = 'Completato con errori';
@@ -1263,7 +1289,8 @@ function resetForMore() {
   fileList = []; uploading = false; uploadedSeconds = 0; nextId = 0;
   ytInfo = null;
   document.getElementById('success-screen').classList.remove('show');
-  document.querySelector('.bottom-nav').style.display = '';
+  document.getElementById('btn-next').style.display = '';
+  // btn-back visibility handled by renderNav
   document.getElementById('upload-panel').style.display = 'none';
   document.getElementById('summary-card').style.display = '';
   document.getElementById('yt-preview-wrap').innerHTML = '';
