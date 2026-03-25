@@ -68,8 +68,11 @@ html,body{
 .app{
   display:flex;
   flex-direction:column;
-  height:100dvh;
-  height:100vh; /* fallback */
+  /* svh = small viewport height = always the visible portion on iOS Safari.
+     This ensures the bottom nav is never under Safari's toolbar. */
+  height:100svh;
+  height:100dvh; /* modern browsers */
+  height:100vh;  /* ultimate fallback */
   overflow:hidden;
 }
 
@@ -147,7 +150,9 @@ html,body{
 /* ── main content — scrollable when needed, otherwise fits ── */
 .main{
   background:var(--surface);
-  padding:0 20px 24px;
+  /* No horizontal padding here — inherited from step-rail's 20px padding.
+     Adding it here would double up and make content narrower than stepper. */
+  padding:0 0 24px;
   flex:1;
   overflow-y:auto;
   -webkit-overflow-scrolling:touch;
@@ -426,7 +431,9 @@ html,body{
 .bottom-nav{
   background:#fff;
   border-top:1px solid var(--border);
-  padding:10px 20px max(14px, env(safe-area-inset-bottom));
+  /* iOS Safari: env(safe-area-inset-bottom) handles the home indicator.
+     Add extra 60px so Safari's floating toolbar never covers the button. */
+  padding:10px 20px calc(10px + env(safe-area-inset-bottom, 20px));
   flex-shrink:0;
 }
 .nav-row{display:flex;gap:10px;max-width:600px;margin:0 auto}
