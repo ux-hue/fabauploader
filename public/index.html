@@ -372,11 +372,29 @@ input::placeholder{color:#c5bfba;font-weight:600}
       <span>▶️</span> Oppure aggiungi da YouTube
     </button>
     <div class="yt-panel" id="yt-panel">
+      <div id="yt-cookies-status" style="margin-bottom:10px"></div>
       <div class="yt-row">
         <input type="url" id="yt-url" placeholder="https://youtube.com/watch?v=…" autocorrect="off" spellcheck="false" onkeydown="if(event.key==='Enter')checkYt()"/>
         <button class="btn-yt-check" id="btn-yt-check" onclick="checkYt()">Cerca</button>
       </div>
       <div id="yt-preview-wrap"></div>
+      <!-- Cookies upload (collapsed by default) -->
+      <details style="margin-top:10px">
+        <summary style="font-size:12px;font-weight:800;color:var(--muted);cursor:pointer;padding:6px 0">🔑 YouTube continua a bloccarsi? Carica i cookie</summary>
+        <div style="margin-top:10px;padding:12px;background:#fff;border-radius:10px;border:1.5px solid #ffd0d0">
+          <p style="font-size:12px;font-weight:700;color:#555;margin-bottom:10px;line-height:1.5">
+            1. Installa l'estensione Chrome <strong>"Get cookies.txt LOCALLY"</strong><br>
+            2. Vai su <strong>youtube.com</strong> mentre sei loggato<br>
+            3. Clicca l'estensione → <strong>Export</strong> → salva il file<br>
+            4. Caricalo qui sotto — viene salvato sul server
+          </p>
+          <input type="file" id="inp-cookies" accept=".txt,text/plain" style="display:none" onchange="uploadCookies(this)"/>
+          <button class="btn-yt-add" style="background:linear-gradient(135deg,#555,#333)" onclick="document.getElementById('inp-cookies').click()">
+            📄 Carica cookies.txt
+          </button>
+          <div id="cookies-result" style="margin-top:8px"></div>
+        </div>
+      </details>
     </div>
 
     <div class="queue-header" id="queue-header">
@@ -737,7 +755,45 @@ let ytInfo = null;
 
 function toggleYt() {
   const panel = document.getElementById('yt-panel');
+  const wasOpen = panel.classList.contains('open');
   panel.classList.toggle('open');
+  if (!wasOpen) checkCookiesStatus();
+}
+
+async function checkCookiesStatus() {
+  try {
+    const r = await fetch('/api/youtube-cookies-status');
+    const d = await r.json();
+    const el = document.getElementById('yt-cookies-status');
+    if (d.hasCookies) {
+      el.innerHTML = `<div class="badge ok" style="margin:0 0 4px">🔑 Cookie YouTube attivi — download abilitato</div>`;
+    } else {
+      el.innerHTML = `<div class="badge err" style="margin:0 0 4px;background:#fffbeb;color:#92400e;border-color:#fcd34d">⚠️ Nessun cookie — YouTube potrebbe bloccare i download. Espandi "🔑 Carica i cookie" qui sotto se non funziona.</div>`;
+    }
+  } catch(e) {}
+}
+
+async function uploadCookies(inp) {
+  const file = inp.files[0];
+  if (!file) return;
+  const result = document.getElementById('cookies-result');
+  result.innerHTML = `<div style="font-size:12px;color:var(--muted);font-weight:700">Caricamento…</div>`;
+
+  const fd = new FormData();
+  fd.append('cookies', file);
+  try {
+    const r = await fetch('/api/youtube-cookies', { method: 'POST', body: fd });
+    const d = await r.json();
+    if (d.ok) {
+      result.innerHTML = `<div class="badge ok" style="margin:0">✅ ${esc(d.message)}</div>`;
+      checkCookiesStatus();
+    } else {
+      result.innerHTML = `<div class="badge err" style="margin:0">❌ ${esc(d.error)}</div>`;
+    }
+  } catch(e) {
+    result.innerHTML = `<div class="badge err" style="margin:0">❌ Errore di rete</div>`;
+  }
+  inp.value = '';
 }
 
 async function checkYt() {
