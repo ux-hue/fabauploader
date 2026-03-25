@@ -147,10 +147,22 @@ input::placeholder{color:#c5bfba;font-weight:600}
 .qitem{
   background:#f8f6f4;border-radius:12px;
   padding:12px 14px;
-  display:grid;grid-template-columns:1fr auto;
+  display:grid;grid-template-columns:auto 1fr auto;
   align-items:center;gap:12px;
   animation:fadeUp .3s ease;
+  transition:opacity .2s, box-shadow .2s;
 }
+.qitem.dragging{opacity:.4}
+.qitem.drag-over{box-shadow:0 0 0 2.5px var(--orange);background:#fff7f2}
+.drag-handle{
+  color:#ccc;font-size:18px;cursor:grab;padding:2px 4px;
+  flex-shrink:0;user-select:none;
+  touch-action:none;
+}
+.drag-handle:active{cursor:grabbing}
+/* hide handle when uploading or item is done */
+.qitem.no-drag .drag-handle{visibility:hidden;cursor:default}
+
 .qitem-info{min-width:0}
 .qitem-name{font-size:14px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--dark)}
 .qitem-size{font-size:11px;color:var(--muted);font-weight:600;margin-top:2px}
@@ -596,7 +608,8 @@ function renderQueue() {
     const size = item.isYoutube ? '▶️ YouTube' : `${(item.file.size/1024/1024).toFixed(1)} MB`;
     const durLabel = item.duration ? `· ${fmtMin(item.duration)}` : '';
     const dotCls = {wait:'st-wait',uploading:'st-wait',ok:'st-ok',err:'st-err'}[item.status];
-    const showRemove = item.status==='wait' && !uploading;
+    const canDrag = item.status === 'wait' && !uploading;
+    const showRemove = item.status === 'wait' && !uploading;
     const removeBtn = showRemove
       ? `<button class="qitem-remove" onclick="removeFile(${item.id})">✕</button>`
       : '';
@@ -615,7 +628,14 @@ function renderQueue() {
       progressHtml = `<div class="qitem-progress"><div class="pbar-label" style="color:var(--red);white-space:normal;line-height:1.4">❌ ${esc(item.msg)}</div></div>`;
     }
 
-    return `<div class="qitem" id="qi-${item.id}">
+    return `<div class="qitem${canDrag ? '' : ' no-drag'}" id="qi-${item.id}"
+        draggable="${canDrag}"
+        ondragstart="dragStart(event,${item.id})"
+        ondragover="dragOver(event,${item.id})"
+        ondragleave="dragLeave(event)"
+        ondrop="dragDrop(event,${item.id})"
+        ondragend="dragEnd(event)">
+      <span class="drag-handle" title="Trascina per riordinare">⠿</span>
       <div class="qitem-info">
         <div class="qitem-name">${esc(item.file.name)}</div>
         <div class="qitem-size">${size} ${durLabel}</div>
@@ -640,6 +660,49 @@ function removeFile(id) {
 function setTitle(id, val) {
   const item = fileList.find(f => f.id===id);
   if (item) item.title = val;
+}
+
+/* ─── drag & drop reorder ───────────────────────────────────────────────────── */
+let dragId = null;
+
+function dragStart(e, id) {
+  dragId = id;
+  e.dataTransfer.effectAllowed = 'move';
+  setTimeout(() => { const el = document.getElementById(`qi-${id}`); if(el) el.classList.add('dragging'); }, 0);
+}
+
+function dragOver(e, id) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  if (id === dragId) return;
+  document.querySelectorAll('.qitem').forEach(el => el.classList.remove('drag-over'));
+  const el = document.getElementById(`qi-${id}`);
+  if (el) el.classList.add('drag-over');
+}
+
+function dragLeave(e) {
+  e.currentTarget.classList.remove('drag-over');
+}
+
+function dragDrop(e, targetId) {
+  e.preventDefault();
+  document.querySelectorAll('.qitem').forEach(el => el.classList.remove('drag-over', 'dragging'));
+  if (dragId === null || dragId === targetId) return;
+
+  const fromIdx = fileList.findIndex(f => f.id === dragId);
+  const toIdx   = fileList.findIndex(f => f.id === targetId);
+  if (fromIdx < 0 || toIdx < 0) return;
+
+  const [item] = fileList.splice(fromIdx, 1);
+  fileList.splice(toIdx, 0, item);
+  dragId = null;
+  renderQueue();
+  updateQueueCounter();
+}
+
+function dragEnd(e) {
+  document.querySelectorAll('.qitem').forEach(el => el.classList.remove('dragging', 'drag-over'));
+  dragId = null;
 }
 
 /* ─── send ──────────────────────────────────────────────────────────────────── */
