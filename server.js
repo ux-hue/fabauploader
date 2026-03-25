@@ -197,70 +197,122 @@ function ytdlpBin() {
 // Path where the user's YouTube cookies.txt is stored persistently
 const COOKIES_PATH = path.join('/tmp', 'yt_cookies.txt');
 
-// Build yt-dlp args, injecting cookies if available
+/* ── notube.net API (primary YouTube source — no auth needed) ─────────────── */
+
+/**
+ * Get video info + MP3 download URL via notube.net
+ * Reverse-engineered from https://github.com/sattorbekh/youtube-downloader
+ * Flow: POST /get → receive token → POST /download with token → receive mp3 URL
+ */
+async function notubeGet(youtubeUrl) {
+  // Step 1: submit URL, get video info + token
+  const r1 = await axios.post('https://notube.net/api/ajaxSearch/index', new URLSearchParams({
+    q: youtubeUrl,
+    vt: 'mp3'
+  }), {
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+      'Referer': 'https://notube.net/',
+      'Origin': 'https://notube.net'
+    },
+    timeout: 30_000
+  });
+
+  const data1 = r1.data;
+  if (!data1 || data1.status !== 'ok') throw new Error('notube: risposta inattesa step 1');
+
+  // Parse the HTML response to extract title, thumbnail, links
+  const { JSDOM: DOM } = require('jsdom');
+  const dom = new DOM(data1.data || '');
+  const doc = dom.window.document;
+
+  const titleEl = doc.querySelector('.title') || doc.querySelector('h3') || doc.querySelector('.video-title');
+  const thumbEl = doc.querySelector('img');
+  const title = titleEl?.textContent?.trim() || 'Audio da YouTube';
+  const thumbnail = thumbEl?.src || null;
+
+  // Find the convert link (first mp3 option)
+  const convertLink = doc.querySelector('a[href*="convert"], a.btn-download, .download-btn a, a[data-fid]');
+  const fid = convertLink?.getAttribute('data-fid') || convertLink?.href?.match(/fid=([^&]+)/)?.[1];
+
+  if (!fid) {
+    // Try direct download link
+    const directLink = doc.querySelector('a[href*=".mp3"]');
+    if (directLink?.href) return { title, thumbnail, mp3Url: directLink.href, duration: null };
+    throw new Error('notube: nessun link di download trovato');
+  }
+
+  // Step 2: convert/get download URL
+  const r2 = await axios.post('https://notube.net/api/ajaxConvert/convert', new URLSearchParams({ fid }), {
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36',
+      'Referer': 'https://notube.net/',
+      'Origin': 'https://notube.net'
+    },
+    timeout: 60_000
+  });
+
+  const data2 = r2.data;
+  if (!data2 || data2.status !== 'ok' || !data2.downloadUrl) {
+    throw new Error('notube: conversione fallita step 2');
+  }
+
+  return { title, thumbnail, mp3Url: data2.downloadUrl, duration: null };
+}
+
+/** Download MP3 from URL and convert to WAV buffer via ffmpeg */
+function mp3UrlToWav(mp3Url) {
+  return new Promise((resolve, reject) => {
+    const tmpOut = path.join(os.tmpdir(), `fab_yt_${Date.now()}.wav`);
+
+    axios.get(mp3Url, { responseType: 'stream', timeout: 120_000 }).then(resp => {
+      const ff = spawn('ffmpeg', ['-i', 'pipe:0', '-acodec', 'pcm_s16le', '-ac', '1', '-ar', '22050', '-f', 'wav', tmpOut]);
+      resp.data.pipe(ff.stdin);
+      ff.stderr.on('data', () => {});
+      ff.on('close', code => {
+        if (code !== 0) { reject(new Error('Conversione audio fallita.')); return; }
+        try { const buf = fs.readFileSync(tmpOut); fs.unlinkSync(tmpOut); resolve(buf); }
+        catch(e) { reject(e); }
+      });
+    }).catch(reject);
+  });
+}
+
+/* ── yt-dlp fallback ──────────────────────────────────────────────────────── */
+
+function ytdlpBin() { return '/usr/local/bin/yt-dlp'; }
+
 function ytdlpArgs(extra = []) {
   const args = ['--no-playlist', '--no-warnings', ...extra];
-  if (fs.existsSync(COOKIES_PATH)) {
-    args.push('--cookies', COOKIES_PATH);
-    console.log('yt-dlp: using cookies from', COOKIES_PATH);
-  }
+  if (fs.existsSync(COOKIES_PATH)) args.push('--cookies', COOKIES_PATH);
   return args;
 }
 
-/** Parse yt-dlp stderr/message into a human-readable Italian error */
 function ytdlpHumanError(raw = '') {
   const msg = raw.toLowerCase();
   if (msg.includes('sign in') || msg.includes('bot') || msg.includes('confirm'))
-    return 'YouTube ha bloccato la richiesta (protezione anti-bot). Carica il file cookies.txt nella sezione YouTube per sbloccare il download.';
-  if (msg.includes('private'))
-    return 'Il video è privato e non può essere scaricato.';
-  if (msg.includes('not available') || msg.includes('unavailable'))
-    return 'Il video non è disponibile in questa regione o è stato rimosso.';
-  if (msg.includes('copyright'))
-    return 'Il video è bloccato per copyright.';
-  if (msg.includes('enoent') || msg.includes('not found'))
-    return 'yt-dlp non è installato sul server. Controlla il Dockerfile.';
-  if (msg.includes('members only'))
-    return 'Il video è riservato agli iscritti al canale.';
-  if (msg.includes('429') || msg.includes('too many'))
-    return 'YouTube ha limitato le richieste dal server. Riprova tra qualche minuto.';
-  return `Impossibile scaricare da YouTube: ${raw.slice(0, 150)}`;
+    return 'YouTube ha bloccato la richiesta anche tramite il servizio di download. Prova a caricare i cookies.txt oppure scarica l\'MP3 manualmente e caricalo.';
+  if (msg.includes('private')) return 'Il video è privato.';
+  if (msg.includes('not available') || msg.includes('unavailable')) return 'Il video non è disponibile.';
+  if (msg.includes('copyright')) return 'Il video è bloccato per copyright.';
+  if (msg.includes('members only')) return 'Riservato agli iscritti al canale.';
+  if (msg.includes('429') || msg.includes('too many')) return 'Troppe richieste a YouTube. Riprova tra qualche minuto.';
+  return `Impossibile scaricare da YouTube: ${raw.slice(0, 120)}`;
 }
 
-/** Fetch video metadata without downloading */
-async function youtubeInfo(url) {
-  try {
-    const { stdout } = await execFileAsync(ytdlpBin(), ytdlpArgs(['--dump-json', url]), { timeout: 30_000 });
-    const info = JSON.parse(stdout);
-    return {
-      title: info.title || 'Audio da YouTube',
-      duration: info.duration || 0,
-      thumbnail: info.thumbnail || null,
-      uploader: info.uploader || ''
-    };
-  } catch(e) {
-    const combined = (e.stderr || '') + (e.message || '');
-    console.error('yt-dlp info error:', combined.slice(0, 300));
-    throw new Error(ytdlpHumanError(combined));
-  }
-}
-
-/** Download audio from YouTube → WAV buffer */
-function youtubeDownload(url) {
+async function ytdlpDownload(url) {
   return new Promise((resolve, reject) => {
-    const tmpOut = path.join(os.tmpdir(), `fab_yt_${Date.now()}.wav`);
+    const tmpOut = path.join(os.tmpdir(), `fab_ytdlp_${Date.now()}.wav`);
     let ytStderr = '';
-
     const ytdlp = spawn(ytdlpBin(), ytdlpArgs(['-f', 'bestaudio', '-o', '-', url]));
     const ff = spawn('ffmpeg', ['-i', 'pipe:0', '-acodec', 'pcm_s16le', '-ac', '1', '-ar', '22050', '-f', 'wav', tmpOut]);
-
     ytdlp.stdout.pipe(ff.stdin);
     ytdlp.stderr.on('data', d => { ytStderr += d.toString(); });
     ff.stderr.on('data', () => {});
-
     ytdlp.on('error', err => reject(new Error(ytdlpHumanError(err.message))));
     ytdlp.on('close', code => { if (code !== 0) { ff.stdin.end(); reject(new Error(ytdlpHumanError(ytStderr))); } });
-
     ff.on('close', code => {
       if (code !== 0) { try { fs.unlinkSync(tmpOut); } catch {} reject(new Error('Conversione audio fallita.')); return; }
       try { const buf = fs.readFileSync(tmpOut); fs.unlinkSync(tmpOut); resolve(buf); }
@@ -269,25 +321,52 @@ function youtubeDownload(url) {
   });
 }
 
+/** Main YouTube download: try notube first, fall back to yt-dlp */
+async function youtubeDownload(url) {
+  try {
+    console.log('YouTube: trying notube.net...');
+    const { mp3Url } = await notubeGet(url);
+    console.log('YouTube: notube OK, downloading MP3...');
+    return await mp3UrlToWav(mp3Url);
+  } catch(e) {
+    console.log('notube failed:', e.message, '— trying yt-dlp fallback');
+    return await ytdlpDownload(url);
+  }
+}
+
+/** Get video info: try notube first, fall back to yt-dlp */
+async function youtubeInfo(url) {
+  try {
+    const info = await notubeGet(url);
+    return { title: info.title, thumbnail: info.thumbnail, duration: info.duration, uploader: '' };
+  } catch(e) {
+    // yt-dlp fallback for info
+    try {
+      const { stdout } = await execFileAsync(ytdlpBin(), ytdlpArgs(['--dump-json', url]), { timeout: 30_000 });
+      const info = JSON.parse(stdout);
+      return { title: info.title || 'Audio da YouTube', duration: info.duration || 0, thumbnail: info.thumbnail || null, uploader: info.uploader || '' };
+    } catch(e2) {
+      const combined = (e2.stderr || '') + (e2.message || '');
+      throw new Error(ytdlpHumanError(combined));
+    }
+  }
+}
+
 /* ── API routes ───────────────────────────────────────────────────────────── */
 
-// Upload YouTube cookies.txt (called once by the admin to bypass bot detection)
+// Upload YouTube cookies.txt fallback
 const cookiesUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 app.post('/api/youtube-cookies', cookiesUpload.single('cookies'), (req, res) => {
   if (!req.file) return res.status(400).json({ ok: false, error: 'Nessun file ricevuto.' });
   const text = req.file.buffer.toString('utf8');
-  if (!text.includes('youtube.com') && !text.includes('# Netscape HTTP Cookie File')) {
-    return res.status(400).json({ ok: false, error: 'Il file non sembra un cookies.txt valido. Esportalo con l\'estensione "Get cookies.txt LOCALLY" da Chrome.' });
-  }
+  if (!text.includes('youtube.com') && !text.includes('# Netscape HTTP Cookie File'))
+    return res.status(400).json({ ok: false, error: 'File non valido. Esportalo con "Get cookies.txt LOCALLY" da Chrome su youtube.com.' });
   fs.writeFileSync(COOKIES_PATH, text);
-  console.log('YouTube cookies saved, size:', text.length);
   res.json({ ok: true, message: 'Cookie salvati! I download YouTube dovrebbero ora funzionare.' });
 });
 
-// Check if cookies are loaded
 app.get('/api/youtube-cookies-status', (req, res) => {
-  const hasCookies = fs.existsSync(COOKIES_PATH);
-  res.json({ hasCookies });
+  res.json({ hasCookies: fs.existsSync(COOKIES_PATH) });
 });
 
 // YouTube: get video info
@@ -295,16 +374,12 @@ app.post('/api/youtube-info', async (req, res) => {
   const { url } = req.body;
   if (!url || !/youtube\.com|youtu\.be/.test(url))
     return res.status(400).json({ ok: false, error: 'URL YouTube non valido.' });
-
   try {
     const info = await youtubeInfo(url);
     res.json({ ok: true, ...info });
   } catch(e) {
     console.error('YouTube info error:', e.message);
-    const msg = e.message.includes('not found') || e.message.includes('ENOENT')
-      ? 'yt-dlp non disponibile sul server.'
-      : 'Video non trovato o non disponibile.';
-    res.status(400).json({ ok: false, error: msg });
+    res.status(400).json({ ok: false, error: e.message });
   }
 });
 
