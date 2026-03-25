@@ -204,6 +204,37 @@ input::placeholder{color:#c5bfba;font-weight:600}
 .sc-title{font-size:21px;font-weight:900;margin-bottom:8px}
 .sc-body{font-size:14px;font-weight:600;opacity:.9;line-height:1.55}
 
+/* ── storage bar ── */
+.storage-wrap{
+  margin-top:12px;padding:14px;
+  background:#f8f6f4;border-radius:12px;
+  display:none;
+  animation:fadeIn .3s ease;
+}
+.storage-wrap.show{display:block}
+.storage-head{
+  display:flex;justify-content:space-between;align-items:center;
+  margin-bottom:8px;font-size:12px;font-weight:800;
+}
+.storage-label{color:var(--muted)}
+.storage-nums{color:var(--dark)}
+.storage-bg{background:#e5e2de;border-radius:99px;height:10px;overflow:hidden}
+.storage-fill{height:100%;border-radius:99px;transition:width .6s ease}
+.storage-fill.ok{background:linear-gradient(90deg,var(--green),#0ab080)}
+.storage-fill.warn{background:linear-gradient(90deg,var(--yellow),#f0a500)}
+.storage-fill.full{background:linear-gradient(90deg,var(--orange),var(--red))}
+.storage-sub{font-size:11px;color:var(--muted);font-weight:700;margin-top:6px;text-align:right}
+
+/* ── queue duration counter ── */
+.queue-header{
+  display:flex;justify-content:space-between;align-items:center;
+  margin-top:14px;margin-bottom:6px;
+  font-size:12px;font-weight:800;color:var(--muted);
+  display:none;
+}
+.queue-header.show{display:flex}
+.queue-total{color:var(--orange)}
+
 /* ── tips ── */
 .tip{
   background:rgba(17,138,178,.07);
@@ -311,6 +342,16 @@ input::placeholder{color:#c5bfba;font-weight:600}
       <span id="verify-lbl">🔗 Verifica link</span>
     </button>
     <div id="link-badge"></div>
+    <div class="storage-wrap" id="storage-wrap">
+      <div class="storage-head">
+        <span class="storage-label">💾 Spazio Faba•Me</span>
+        <span class="storage-nums" id="storage-nums">— / —</span>
+      </div>
+      <div class="storage-bg">
+        <div class="storage-fill ok" id="storage-fill" style="width:0%"></div>
+      </div>
+      <div class="storage-sub" id="storage-sub"></div>
+    </div>
   </div>
 
   <!-- Step 2 — files -->
@@ -338,6 +379,10 @@ input::placeholder{color:#c5bfba;font-weight:600}
       <div id="yt-preview-wrap"></div>
     </div>
 
+    <div class="queue-header" id="queue-header">
+      <span>File in coda</span>
+      <span class="queue-total" id="queue-total"></span>
+    </div>
     <div class="queue" id="queue"></div>
   </div>
 
@@ -380,9 +425,77 @@ input::placeholder{color:#c5bfba;font-weight:600}
 <script>
 /* ─── state ────────────────────────────────────────────────────────────────── */
 let shareId = null;
-let fileList = []; // [{file, title, id, status:'wait'|'uploading'|'ok'|'err', msg}]
+let fileList = []; // [{file, title, id, duration, status, msg, ...}]
 let uploading = false;
 let nextId = 0;
+let storageUsed = null;   // seconds already used on device
+let storageMax  = null;   // total seconds allowed on device
+let uploadedSeconds = 0;  // seconds successfully uploaded this session
+
+/* ─── duration helpers ──────────────────────────────────────────────────────── */
+function fmtMin(sec) {
+  if (!sec && sec !== 0) return '?';
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return s > 0 ? `${m} min ${s} sec` : `${m} min`;
+}
+
+function getAudioDuration(file) {
+  return new Promise(resolve => {
+    const url = URL.createObjectURL(file);
+    const a = new Audio();
+    a.addEventListener('loadedmetadata', () => {
+      URL.revokeObjectURL(url);
+      resolve(isFinite(a.duration) ? Math.round(a.duration) : null);
+    });
+    a.addEventListener('error', () => { URL.revokeObjectURL(url); resolve(null); });
+    a.src = url;
+  });
+}
+
+function updateStorageBar(extraSeconds = 0) {
+  const wrap = document.getElementById('storage-wrap');
+  const fill = document.getElementById('storage-fill');
+  const nums = document.getElementById('storage-nums');
+  const sub  = document.getElementById('storage-sub');
+
+  if (storageMax === null && storageUsed === null) {
+    // No storage data from server — show queue duration only
+    wrap.classList.remove('show');
+    return;
+  }
+
+  wrap.classList.add('show');
+
+  const used = (storageUsed || 0) + uploadedSeconds + extraSeconds;
+  const max  = storageMax || 0;
+  const pct  = max > 0 ? Math.min(100, Math.round(used / max * 100)) : 0;
+  const free = Math.max(0, max - used);
+
+  fill.style.width = pct + '%';
+  fill.className = 'storage-fill ' + (pct >= 95 ? 'full' : pct >= 75 ? 'warn' : 'ok');
+
+  if (max > 0) {
+    nums.textContent = `${fmtMin(used)} / ${fmtMin(max)}`;
+    sub.textContent = `Spazio rimanente: ~${fmtMin(free)}`;
+  } else {
+    nums.textContent = `Usati: ${fmtMin(used)}`;
+    sub.textContent = '';
+  }
+}
+
+function updateQueueCounter() {
+  const header = document.getElementById('queue-header');
+  const total  = document.getElementById('queue-total');
+  const waiting = fileList.filter(f => f.status === 'wait' || f.status === 'uploading');
+  if (!waiting.length) { header.classList.remove('show'); return; }
+
+  header.classList.add('show');
+  const known = waiting.filter(f => f.duration);
+  const totalSec = known.reduce((a,f) => a + f.duration, 0);
+  const hasUnknown = known.length < waiting.length;
+  total.textContent = `${waiting.length} file${totalSec ? ' · ' + fmtMin(totalSec) + (hasUnknown ? '+' : '') : ''}`;
+}
 
 /* ─── link verify ───────────────────────────────────────────────────────────── */
 async function verifyLink() {
@@ -406,8 +519,13 @@ async function verifyLink() {
 
     if (d.ok) {
       shareId = d.shareId;
+      storageUsed = d.usedSeconds;
+      storageMax  = d.maxSeconds;
+      uploadedSeconds = 0;
+
       const exp = d.expiresLabel ? ` — scade ${d.expiresLabel}` : '';
       badge.innerHTML = `<div class="badge ok">✅ Link valido${exp}</div>`;
+      updateStorageBar();
       unlock('s2'); unlock('s3'); unlock('s4');
       checkSend();
     } else {
@@ -431,15 +549,25 @@ function dzLeave(){ dz.classList.remove('over'); }
 function dzDrop(e){ e.preventDefault(); dz.classList.remove('over'); addFiles(e.dataTransfer.files); }
 function filesChosen(inp){ addFiles(inp.files); inp.value=''; }
 
-function addFiles(files) {
+async function addFilesAsync(files) {
   for (const f of files) {
     if (!f.type.startsWith('audio/') && !/\.(mp3|wav|ogg|aac|m4a|flac|opus)$/i.test(f.name)) continue;
     const defaultTitle = f.name.replace(/\.[^.]+$/,'');
-    fileList.push({ file:f, title:defaultTitle, id:nextId++ , status:'wait', msg:'' });
+    const item = { file:f, title:defaultTitle, id:nextId++, status:'wait', msg:'', duration:null };
+    fileList.push(item);
+    renderQueue();
+    updateQueueCounter();
+    // Read duration in background
+    getAudioDuration(f).then(dur => {
+      item.duration = dur;
+      renderQueue();
+      updateQueueCounter();
+    });
   }
-  renderQueue();
   checkSend();
 }
+
+function addFiles(files) { addFilesAsync(files); }
 
 /* ─── queue render ──────────────────────────────────────────────────────────── */
 function renderQueue() {
@@ -447,13 +575,13 @@ function renderQueue() {
   if (!fileList.length){ el.innerHTML=''; return; }
 
   el.innerHTML = fileList.map(item => {
-    const size = (item.file.size/1024/1024).toFixed(1);
+    const size = item.isYoutube ? '▶️ YouTube' : `${(item.file.size/1024/1024).toFixed(1)} MB`;
+    const durLabel = item.duration ? `· ${fmtMin(item.duration)}` : '';
     const dotCls = {wait:'st-wait',uploading:'st-wait',ok:'st-ok',err:'st-err'}[item.status];
     const showRemove = item.status==='wait' && !uploading;
     const removeBtn = showRemove
       ? `<button class="qitem-remove" onclick="removeFile(${item.id})">✕</button>`
       : '';
-
     const canEditTitle = item.status === 'wait' && !uploading;
 
     let progressHtml = '';
@@ -463,15 +591,16 @@ function renderQueue() {
         <div class="pbar-label" id="pl-${item.id}">${esc(item.msg||'In coda…')}</div>
       </div>`;
     } else if (item.status === 'ok') {
-      progressHtml = `<div class="qitem-progress"><div class="pbar-label" style="color:#059669">✅ Caricato!</div></div>`;
+      const okDur = item.duration ? ` (${fmtMin(item.duration)})` : '';
+      progressHtml = `<div class="qitem-progress"><div class="pbar-label" style="color:#059669">✅ Caricato!${okDur}</div></div>`;
     } else if (item.status === 'err') {
-      progressHtml = `<div class="qitem-progress"><div class="pbar-label" style="color:var(--red)">❌ ${esc(item.msg)}</div></div>`;
+      progressHtml = `<div class="qitem-progress"><div class="pbar-label" style="color:var(--red);white-space:normal;line-height:1.4">❌ ${esc(item.msg)}</div></div>`;
     }
 
     return `<div class="qitem" id="qi-${item.id}">
       <div class="qitem-info">
         <div class="qitem-name">${esc(item.file.name)}</div>
-        <div class="qitem-size">${size} MB</div>
+        <div class="qitem-size">${size} ${durLabel}</div>
         ${canEditTitle ? `<input type="text" style="margin-top:8px;font-size:13px;padding:7px 10px;border-radius:8px;border:1.5px solid #ddd;font-family:Nunito,sans-serif;font-weight:700;width:100%" value="${esc(item.title)}" placeholder="Titolo" oninput="setTitle(${item.id},this.value)"/>` : `<div style="font-size:12px;color:var(--muted);margin-top:4px;font-weight:700">${esc(item.title)}</div>`}
       </div>
       <div class="qitem-status">
@@ -486,6 +615,7 @@ function renderQueue() {
 function removeFile(id) {
   fileList = fileList.filter(f => f.id !== id);
   renderQueue();
+  updateQueueCounter();
   checkSend();
 }
 
@@ -516,6 +646,7 @@ async function startUpload() {
     item.msg = 'Conversione audio…';
     item.pct = 10;
     renderQueue();
+    updateQueueCounter();
 
     // Animate progress during upload
     const isYt = !!item.isYoutube;
@@ -537,19 +668,12 @@ async function startUpload() {
     try {
       let r, d;
       if (item.isYoutube) {
-        // YouTube: server downloads + converts + uploads
         r = await fetch('/api/youtube-upload', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            url: item.youtubeUrl,
-            shareId,
-            author,
-            title: item.title
-          })
+          body: JSON.stringify({ url: item.youtubeUrl, shareId, author, title: item.title })
         });
       } else {
-        // Normal file upload
         const fd = new FormData();
         fd.append('shareId', shareId);
         fd.append('author', author);
@@ -564,6 +688,12 @@ async function startUpload() {
       if (d.ok) {
         item.status = 'ok';
         item.pct = 100;
+        // Track uploaded seconds to update the storage bar
+        const dur = d.duration || item.duration || 0;
+        if (dur) {
+          uploadedSeconds += dur;
+          updateStorageBar();
+        }
       } else {
         item.status = 'err';
         item.msg = d.error || 'Errore sconosciuto';
@@ -572,13 +702,13 @@ async function startUpload() {
     } catch(e) {
       clearInterval(interval);
       item.status = 'err';
-      item.msg = 'Errore di rete';
+      item.msg = 'Errore di rete — controlla la connessione e riprova.';
       allOk = false;
     }
 
     renderQueue();
+    updateQueueCounter();
 
-    // Small pause between uploads so Faba server doesn't get overwhelmed
     if (pending.indexOf(item) < pending.length - 1) {
       await sleep(1500);
     }
