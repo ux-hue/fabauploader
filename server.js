@@ -190,47 +190,124 @@ function humanError(raw) {
 
 
 
-/* ── YouTube via youtubei.js (InnerTube API) ──────────────────────────────── */
-
-let Innertube = null;
-let innertubeInstance = null;
-
-async function getInnertube() {
-  if (!innertubeInstance) {
-    if (!Innertube) {
-      const mod = await import('youtubei.js');
-      Innertube = mod.Innertube;
-    }
-    innertubeInstance = await Innertube.create();
-  }
-  return innertubeInstance;
-}
+/* ── YouTube via InnerTube API diretto (axios) ────────────────────────────── */
+//
+// Chiama /youtubei/v1/player direttamente — nessun parsing HTML,
+// nessun wrapper che può crashare. Prova più client in sequenza.
+//
 
 function extractVideoId(url) {
   const m = url.match(/(?:v=|youtu\.be\/|\/v\/|\/embed\/)([A-Za-z0-9_-]{11})/);
   return m ? m[1] : null;
 }
 
-// Try clients in order until one returns OK status + streaming data
-const YT_CLIENTS = ['IOS', 'MWEB', 'ANDROID', 'TV'];
-
-async function getYoutubeInfo(videoId) {
-  const yt = await getInnertube();
-  let lastStatus = 'UNKNOWN';
-  for (const client of YT_CLIENTS) {
-    try {
-      const info = await yt.getBasicInfo(videoId, { client });
-      const status = info.playability_status?.status;
-      console.log(`[yt] client=${client} status=${status}`);
-      lastStatus = status || 'OK';
-      if (!status || status === 'OK') return { yt, info, client };
-    } catch(e) {
-      console.log(`[yt] client=${client} threw: ${e.message.slice(0, 100)}`);
+// Configurazioni client InnerTube
+const INNERTUBE_CLIENTS = [
+  {
+    name: 'IOS',
+    context: {
+      client: {
+        clientName: 'IOS',
+        clientVersion: '19.45.4',
+        deviceModel: 'iPhone16,2',
+        osVersion: '17.5.1.21F90',
+        hl: 'en', gl: 'US'
+      }
+    },
+    headers: {
+      'User-Agent': 'com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X)',
+      'X-YouTube-Client-Name': '5',
+      'X-YouTube-Client-Version': '19.45.4',
+    }
+  },
+  {
+    name: 'ANDROID',
+    context: {
+      client: {
+        clientName: 'ANDROID',
+        clientVersion: '19.44.38',
+        androidSdkVersion: 34,
+        hl: 'en', gl: 'US'
+      }
+    },
+    headers: {
+      'User-Agent': 'com.google.android.youtube/19.44.38 (Linux; U; Android 14)',
+      'X-YouTube-Client-Name': '3',
+      'X-YouTube-Client-Version': '19.44.38',
+    }
+  },
+  {
+    name: 'WEB_EMBEDDED',
+    context: {
+      client: {
+        clientName: 'WEB_EMBEDDED_PLAYER',
+        clientVersion: '2.20240101',
+        hl: 'en', gl: 'US'
+      }
+    },
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36',
+      'X-YouTube-Client-Name': '56',
+      'X-YouTube-Client-Version': '2.20240101',
+      'Origin': 'https://www.youtube.com',
     }
   }
-  if (lastStatus === 'LOGIN_REQUIRED') throw new Error('LOGIN_REQUIRED');
-  if (lastStatus === 'UNPLAYABLE')     throw new Error('UNPLAYABLE');
-  throw new Error('NO_CLIENTS');
+];
+
+const INNERTUBE_URL = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
+
+async function fetchPlayerData(videoId) {
+  for (const client of INNERTUBE_CLIENTS) {
+    try {
+      const body = {
+        videoId,
+        context: client.context,
+        playbackContext: { contentPlaybackContext: { signatureTimestamp: 0 } }
+      };
+      const resp = await axios.post(INNERTUBE_URL, body, {
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+          ...client.headers
+        },
+        timeout: 15_000
+      });
+      const d = resp.data;
+      const status = d?.playabilityStatus?.status;
+      console.log(`[yt] client=${client.name} status=${status}`);
+
+      if (status === 'OK') {
+        return { data: d, clientName: client.name };
+      }
+      if (status === 'LOGIN_REQUIRED' || status === 'UNPLAYABLE' || status === 'ERROR') {
+        // try next client
+        continue;
+      }
+    } catch(e) {
+      console.log(`[yt] client=${client.name} error: ${e.message.slice(0, 80)}`);
+    }
+  }
+  return null; // tutti i client falliti
+}
+
+function parsePlayerData(data) {
+  const details = data.videoDetails || {};
+  const title = details.title || 'Audio da YouTube';
+  const duration = parseInt(details.lengthSeconds) || 0;
+  const thumbnails = details.thumbnail?.thumbnails || [];
+  const thumbnail = thumbnails[thumbnails.length - 1]?.url || null;
+
+  // Trova il miglior formato audio
+  const allFormats = [
+    ...(data.streamingData?.adaptiveFormats || []),
+    ...(data.streamingData?.formats || [])
+  ];
+  const audioFormats = allFormats
+    .filter(f => f.mimeType?.startsWith('audio/') && f.url)
+    .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+
+  const audioUrl = audioFormats[0]?.url || null;
+  return { title, duration, thumbnail, audioUrl };
 }
 
 app.post('/api/youtube-info', async (req, res) => {
@@ -243,14 +320,11 @@ app.post('/api/youtube-info', async (req, res) => {
     return res.status(400).json({ ok: false, error: 'ID video non trovato nell\'URL.' });
 
   try {
-    const { info } = await getYoutubeInfo(videoId);
-    const d = info.basic_info;
-    res.json({
-      ok: true,
-      title:    d.title    || 'Audio da YouTube',
-      duration: d.duration || 0,
-      thumbnail: d.thumbnail?.[0]?.url || null,
-    });
+    const result = await fetchPlayerData(videoId);
+    if (!result) return res.status(400).json({ ok: false, error: 'Video non accessibile dal server. Prova a caricare l\'MP3 manualmente.' });
+
+    const { title, duration, thumbnail } = parsePlayerData(result.data);
+    res.json({ ok: true, title, duration, thumbnail });
   } catch(e) {
     console.error('yt-info error:', e.message);
     res.status(400).json({ ok: false, error: ytHumanError(e.message) });
@@ -268,23 +342,12 @@ app.post('/api/youtube-upload', async (req, res) => {
 
   try {
     console.log(`[yt] downloading ${videoId}`);
-    const { yt, info, client } = await getYoutubeInfo(videoId);
+    const result = await fetchPlayerData(videoId);
+    if (!result) throw new Error('NO_CLIENTS');
 
-    // Get best audio-only format
-    let format;
-    try {
-      format = info.chooseFormat({ type: 'audio', quality: 'best' });
-    } catch(_) {
-      const fmts = info.streaming_data?.adaptive_formats || info.streaming_data?.formats || [];
-      format = fmts
-        .filter(f => f.has_audio && !f.has_video)
-        .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
-    }
-    if (!format) throw new Error('NO_FORMAT');
-
-    const audioUrl = format.decipher(yt.session.player);
-    if (!audioUrl) throw new Error('DECIPHER_FAILED');
-    console.log(`[yt] audio URL ok via ${client}`);
+    const { audioUrl } = parsePlayerData(result.data);
+    if (!audioUrl) throw new Error('NO_FORMAT');
+    console.log(`[yt] audio URL via ${result.clientName}`);
 
     const wavBuf = await new Promise((resolve, reject) => {
       const tmpOut = path.join(os.tmpdir(), `fab_yt_${Date.now()}.wav`);
@@ -300,7 +363,7 @@ app.post('/api/youtube-upload', async (req, res) => {
       ff.stderr.on('data', d => { ffErr += d.toString(); });
       ff.on('close', code => {
         if (code !== 0) {
-          console.error('ffmpeg stderr (last 400):', ffErr.slice(-400));
+          console.error('ffmpeg stderr:', ffErr.slice(-400));
           reject(new Error('FFMPEG_FAILED'));
           return;
         }
@@ -328,9 +391,9 @@ function ytHumanError(msg = '') {
     return 'Il video è privato o richiede accesso.';
   if (m === 'unplayable' || m.includes('unavailable') || m.includes('not available'))
     return 'Il video non è disponibile in questa regione o è stato rimosso.';
-  if (m === 'no_clients')
-    return 'YouTube non ha fornito il video. Potrebbe essere con restrizioni — prova a caricare l\'MP3 manualmente.';
-  if (m === 'no_format' || m.includes('decipher'))
+  if (m === 'no_clients' || m.includes('tutti i client') || m.includes('non accessibile'))
+    return 'Il video non è scaricabile dal server. Prova a caricare l\'MP3 manualmente o usa un link YouTube diverso.';
+  if (m === 'no_format' || m.includes('decipher') || m.includes('audio url'))
     return 'Formato audio non ottenibile. Prova con un altro video o carica l\'MP3 manualmente.';
   if (m === 'ffmpeg_failed' || m.includes('conversione'))
     return 'Errore nella conversione audio. Prova con un altro video.';
