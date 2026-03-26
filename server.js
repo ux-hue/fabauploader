@@ -193,6 +193,30 @@ function humanError(raw) {
 
 /* ── API routes ───────────────────────────────────────────────────────────── */
 
+// DEBUG: testa un singolo client InnerTube e ritorna il risultato dettagliato
+app.post('/api/yt-test', async (req, res) => {
+  const { videoId, client } = req.body;
+  if (!videoId || !client) return res.status(400).json({ error: 'Missing params' });
+  try {
+    const clientCtx = { clientName: client.clientName, clientVersion: client.clientVersion, hl: 'en', gl: 'US', ...(client.extra || {}) };
+    const r = await axios.post(
+      'https://www.youtube.com/youtubei/v1/player?prettyPrint=false',
+      { videoId, context: { client: clientCtx }, racyCheckOk: true, contentCheckOk: true },
+      { headers: { 'Content-Type': 'application/json', ...(client.headers || {}) }, timeout: 15_000 }
+    );
+    const d = r.data;
+    const status = d.playabilityStatus?.status;
+    const reason = d.playabilityStatus?.reason || '';
+    const fmts = [...(d.streamingData?.adaptiveFormats||[]), ...(d.streamingData?.formats||[])]
+      .filter(f => f.mimeType?.startsWith('audio/'));
+    const audioWithUrl = fmts.filter(f => f.url);
+    const audioWithCipher = fmts.filter(f => f.signatureCipher);
+    res.json({ status, reason, audioWithUrl: audioWithUrl.length, audioWithCipher: audioWithCipher.length, firstUrl: audioWithUrl[0]?.url?.slice(0,100) || null });
+  } catch(e) {
+    res.json({ status: 'ERROR', error: e.message, audioWithUrl: 0, audioWithCipher: 0 });
+  }
+});
+
 // InnerTube proxy — solo metadati (titolo, durata, thumbnail + URL audio)
 app.post('/api/yt-info', async (req, res) => {
   const { videoId } = req.body;
