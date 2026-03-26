@@ -192,6 +192,54 @@ function humanError(raw) {
 
 
 /* ── API routes ───────────────────────────────────────────────────────────── */
+
+// InnerTube proxy — solo metadati (titolo, durata, thumbnail + URL audio)
+// Il server fa la richiesta a YouTube per conto del browser (bypassa CORS).
+// Payload < 50KB, nessun audio scaricato lato server.
+app.post('/api/yt-info', async (req, res) => {
+  const { videoId } = req.body;
+  if (!videoId || !/^[A-Za-z0-9_-]{11}$/.test(videoId))
+    return res.status(400).json({ ok: false, error: 'ID video non valido.' });
+
+  try {
+    const r = await axios.post(
+      'https://www.youtube.com/youtubei/v1/player?prettyPrint=false',
+      {
+        videoId,
+        context: { client: { clientName: 'WEB', clientVersion: '2.20250312.04.00', hl: 'en', gl: 'US' } },
+        racyCheckOk: true, contentCheckOk: true
+      },
+      { headers: { 'Content-Type': 'application/json' }, timeout: 15_000 }
+    );
+    const d = r.data;
+    const status = d.playabilityStatus?.status;
+    if (status && status !== 'OK')
+      return res.json({ ok: false, error: d.playabilityStatus?.reason || status });
+
+    // Extract audio formats with direct URLs (no cipher needed for WEB client)
+    const fmts = [...(d.streamingData?.adaptiveFormats || []), ...(d.streamingData?.formats || [])]
+      .filter(f => f.mimeType?.startsWith('audio/') && f.url)
+      .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+
+    if (!fmts.length)
+      return res.json({ ok: false, error: 'Nessun formato audio disponibile.' });
+
+    const det = d.videoDetails || {};
+    const thumbs = det.thumbnail?.thumbnails || [];
+    res.json({
+      ok: true,
+      title: det.title || 'Audio da YouTube',
+      duration: parseInt(det.lengthSeconds) || 0,
+      thumbnail: thumbs[thumbs.length - 1]?.url || null,
+      audioUrl: fmts[0].url,
+      mimeType: fmts[0].mimeType.split(';')[0]
+    });
+  } catch(e) {
+    console.error('yt-info proxy error:', e.message);
+    res.status(500).json({ ok: false, error: 'Errore nel recupero del video.' });
+  }
+});
+
 // Validate link
 app.post('/api/validate', async (req, res) => {
   const shareId = extractShareId(req.body.url || '');
