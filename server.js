@@ -217,30 +217,23 @@ app.post('/api/yt-test', async (req, res) => {
   }
 });
 
-// InnerTube proxy — solo metadati (titolo, durata, thumbnail + URL audio)
+// InnerTube proxy — usa ANDROID_VR (confermato funzionante da server Render)
 app.post('/api/yt-info', async (req, res) => {
   const { videoId } = req.body;
   if (!videoId || !/^[A-Za-z0-9_-]{11}$/.test(videoId))
     return res.status(400).json({ ok: false, error: 'ID video non valido.' });
 
   try {
-    // ANDROID_VR non richiede PO token — funziona da server IP
     const r = await axios.post(
       'https://www.youtube.com/youtubei/v1/player?prettyPrint=false',
       {
         videoId,
-        context: {
-          client: {
-            clientName: 'ANDROID_VR',
-            clientVersion: '1.56.21',
-            deviceMake: 'Oculus',
-            deviceModel: 'Quest 3',
-            androidSdkVersion: 32,
-            osName: 'Android',
-            osVersion: '12L',
-            hl: 'en', gl: 'US'
-          }
-        },
+        context: { client: {
+          clientName: 'ANDROID_VR', clientVersion: '1.56.21',
+          deviceMake: 'Oculus', deviceModel: 'Quest 3',
+          androidSdkVersion: 32, osName: 'Android', osVersion: '12L',
+          hl: 'en', gl: 'US'
+        }},
         racyCheckOk: true, contentCheckOk: true
       },
       {
@@ -253,48 +246,39 @@ app.post('/api/yt-info', async (req, res) => {
         timeout: 15_000
       }
     );
+
     const d = r.data;
     const status = d.playabilityStatus?.status;
 
-    // Ottieni metadati base (funziona anche con UNPLAYABLE)
+    if (status && status !== 'OK') {
+      const reason = d.playabilityStatus?.reason || '';
+      if (status === 'LOGIN_REQUIRED')
+        return res.json({ ok: false, error: 'Questo video non è accessibile dal server (restrizioni geografiche o di rete). Prova un altro video o carica l\'MP3 manualmente.' });
+      if (status === 'UNPLAYABLE')
+        return res.json({ ok: false, error: `Video non disponibile: ${reason || 'restrizioni sconosciute'}.` });
+      return res.json({ ok: false, error: reason || status });
+    }
+
+    const fmts = [...(d.streamingData?.adaptiveFormats||[]), ...(d.streamingData?.formats||[])]
+      .filter(f => f.mimeType?.startsWith('audio/') && f.url)
+      .sort((a, b) => (b.bitrate||0) - (a.bitrate||0));
+
+    if (!fmts.length)
+      return res.json({ ok: false, error: 'Nessun formato audio disponibile.' });
+
     const det = d.videoDetails || {};
     const thumbs = det.thumbnail?.thumbnails || [];
-    const title = det.title || 'Audio da YouTube';
-    const duration = parseInt(det.lengthSeconds) || 0;
-    const thumbnail = thumbs[thumbs.length - 1]?.url || null;
-
-    // Cerca URL audio diretto nei formati
-    const fmts = [...(d.streamingData?.adaptiveFormats || []), ...(d.streamingData?.formats || [])]
-      .filter(f => f.mimeType?.startsWith('audio/') && f.url)
-      .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
-
-    if (!fmts.length) {
-      // ANDROID_VR non ha dato audio — usa oEmbed solo per il titolo
-      // e restituiamo senza audioUrl, il browser userà il proxy download
-      if (!det.title) {
-        const oEmbed = await axios.get(`https://www.youtube.com/oembed?url=https://youtu.be/${videoId}&format=json`, { timeout: 8_000 });
-        return res.json({ ok: true, title: oEmbed.data.title || title, duration, thumbnail, audioUrl: null, mimeType: null });
-      }
-      return res.json({ ok: false, error: 'Nessun formato audio disponibile per questo video.' });
-    }
-
     res.json({
       ok: true,
-      title,
-      duration,
-      thumbnail,
-      audioUrl: fmts[0].url,
-      mimeType: fmts[0].mimeType.split(';')[0]
+      title:    det.title || 'Audio da YouTube',
+      duration: parseInt(det.lengthSeconds) || 0,
+      thumbnail: thumbs[thumbs.length-1]?.url || null,
+      audioUrl:  fmts[0].url,
+      mimeType:  fmts[0].mimeType.split(';')[0]
     });
   } catch(e) {
-    console.error('yt-info proxy error:', e.message);
-    // Fallback: prova oEmbed solo per titolo/thumbnail
-    try {
-      const oEmbed = await axios.get(`https://www.youtube.com/oembed?url=https://youtu.be/${videoId}&format=json`, { timeout: 8_000 });
-      res.json({ ok: true, title: oEmbed.data.title || 'Audio da YouTube', duration: 0, thumbnail: oEmbed.data.thumbnail_url || null, audioUrl: null, mimeType: null });
-    } catch(_) {
-      res.status(500).json({ ok: false, error: 'Errore nel recupero del video.' });
-    }
+    console.error('yt-info error:', e.message);
+    res.status(500).json({ ok: false, error: 'Errore nel recupero del video.' });
   }
 });
 
