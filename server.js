@@ -195,9 +195,12 @@ function humanError(raw) {
 // No HTML page parsing → immune to watch.html changes.
 // Maintained actively: github.com/LuanRT/YouTube.js
 //
+// NOTE: v17 API change — second arg is now an object: { client: 'ANDROID' }
+// not a plain string.
+//
 
-let Innertube;
-let innertubeInstance = null; // reuse across requests
+let Innertube = null;
+let innertubeInstance = null;
 
 async function getInnertube() {
   if (!innertubeInstance) {
@@ -205,14 +208,15 @@ async function getInnertube() {
       const mod = await import('youtubei.js');
       Innertube = mod.Innertube;
     }
-    innertubeInstance = await Innertube.create({
-      fetch: (input, init) => {
-        // Node.js fetch polyfill — youtubei.js supports native fetch in Node 18+
-        return fetch(input, init);
-      }
-    });
+    innertubeInstance = await Innertube.create();
   }
   return innertubeInstance;
+}
+
+// Extract video ID from any YouTube URL
+function extractVideoId(url) {
+  const m = url.match(/(?:v=|youtu\.be\/|\/v\/|\/embed\/)([A-Za-z0-9_-]{11})/);
+  return m ? m[1] : null;
 }
 
 // Get video info (title, thumbnail, duration)
@@ -220,9 +224,21 @@ app.post('/api/youtube-info', async (req, res) => {
   const { url } = req.body;
   if (!url || !/youtube\.com|youtu\.be/.test(url))
     return res.status(400).json({ ok: false, error: 'URL YouTube non valido.' });
+
+  const videoId = extractVideoId(url);
+  if (!videoId)
+    return res.status(400).json({ ok: false, error: 'ID video non trovato nell\'URL.' });
+
   try {
     const yt = await getInnertube();
-    const info = await yt.getBasicInfo(url, 'ANDROID');
+    // Use TV client — works from server IPs without bot detection
+    const info = await yt.getBasicInfo(videoId, { client: 'TV' });
+
+    if (info.playability_status?.status === 'LOGIN_REQUIRED')
+      return res.status(400).json({ ok: false, error: 'Il video richiede accesso (privato o con età).' });
+    if (info.playability_status?.status === 'UNPLAYABLE')
+      return res.status(400).json({ ok: false, error: 'Il video non è disponibile: ' + (info.playability_status.reason || '') });
+
     const d = info.basic_info;
     res.json({
       ok: true,
@@ -236,39 +252,54 @@ app.post('/api/youtube-info', async (req, res) => {
   }
 });
 
-// Download audio + convert to WAV + upload to Faba — all server-side
+// Download audio + convert to WAV + upload to Faba
 app.post('/api/youtube-upload', async (req, res) => {
   const { url, shareId, author, title } = req.body;
   if (!url || !shareId || !author || !title)
     return res.status(400).json({ ok: false, error: 'Dati mancanti.' });
 
+  const videoId = extractVideoId(url);
+  if (!videoId)
+    return res.status(400).json({ ok: false, error: 'ID video non trovato nell\'URL.' });
+
   try {
-    console.log(`YouTube download: ${url}`);
+    console.log(`YouTube download: ${videoId}`);
     const yt = await getInnertube();
-    const info = await yt.getBasicInfo(url, 'ANDROID');
+    const info = await yt.getBasicInfo(videoId, { client: 'TV' });
 
-    // Pick best audio-only format
-    const formats = info.streaming_data?.adaptive_formats || [];
-    const audioFmt = formats
-      .filter(f => f.has_audio && !f.has_video)
-      .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+    if (info.playability_status?.status === 'LOGIN_REQUIRED')
+      throw new Error('Il video richiede accesso (privato o con età).');
+    if (info.playability_status?.status === 'UNPLAYABLE')
+      throw new Error('Il video non è disponibile.');
 
-    if (!audioFmt) throw new Error('Nessun formato audio trovato per questo video.');
+    // Get best audio-only format and decipher its URL
+    const format = info.chooseFormat({ type: 'audio', quality: 'best' });
+    if (!format) throw new Error('Nessun formato audio trovato per questo video.');
 
-    const audioUrl = audioFmt.decipher(yt.session.player);
+    const audioUrl = format.decipher(yt.session.player);
+    if (!audioUrl) throw new Error('Impossibile ottenere URL audio (decipher fallito).');
 
-    // Stream from URL → ffmpeg → WAV buffer
+    console.log(`Audio URL obtained, converting...`);
+
+    // ffmpeg fetches the URL directly → converts to WAV
     const wavBuf = await new Promise((resolve, reject) => {
       const tmpOut = path.join(os.tmpdir(), `fab_yt_${Date.now()}.wav`);
       const { spawn } = require('child_process');
       const ff = spawn('ffmpeg', [
-        '-y', '-i', audioUrl,
+        '-y',
+        '-user_agent', 'Mozilla/5.0 (SMART-TV; Linux; Tizen 6.0) AppleWebKit/538.1',
+        '-i', audioUrl,
         '-acodec', 'pcm_s16le', '-ac', '1', '-ar', '22050',
         '-f', 'wav', tmpOut
       ]);
-      ff.stderr.on('data', () => {});
+      let ffErr = '';
+      ff.stderr.on('data', d => { ffErr += d.toString(); });
       ff.on('close', code => {
-        if (code !== 0) { reject(new Error('Conversione audio fallita.')); return; }
+        if (code !== 0) {
+          console.error('ffmpeg stderr:', ffErr.slice(-300));
+          reject(new Error('Conversione audio fallita.'));
+          return;
+        }
         try { const buf = fs.readFileSync(tmpOut); fs.unlinkSync(tmpOut); resolve(buf); }
         catch(e) { reject(e); }
       });
@@ -289,15 +320,18 @@ app.post('/api/youtube-upload', async (req, res) => {
 
 function ytHumanError(msg = '') {
   const m = msg.toLowerCase();
-  if (m.includes('sign in') || m.includes('bot') || m.includes('login') || m.includes('confirm'))
-    return 'YouTube ha bloccato la richiesta. Prova con un altro video o carica l\'MP3 manualmente.';
+  if (m.includes('sign in') || m.includes('login_required') || m.includes('login'))
+    return 'Il video è privato o richiede accesso.';
   if (m.includes('private'))      return 'Il video è privato.';
-  if (m.includes('unavailable') || m.includes('not available')) return 'Il video non è disponibile.';
+  if (m.includes('unplayable') || m.includes('unavailable') || m.includes('not available'))
+    return 'Il video non è disponibile in questa regione o è stato rimosso.';
   if (m.includes('copyright'))    return 'Il video è bloccato per copyright.';
   if (m.includes('age'))          return 'Il video ha restrizioni di età.';
   if (m.includes('members'))      return 'Il video è riservato agli iscritti al canale.';
-  if (m.includes('formato') || m.includes('format') || m.includes('no audio'))
-    return 'Formato audio non trovato per questo video. Prova con un altro link.';
+  if (m.includes('decipher') || m.includes('formato') || m.includes('format') || m.includes('audio url'))
+    return 'Formato audio non ottenibile. Prova con un altro video o carica l\'MP3 manualmente.';
+  if (m.includes('conversione') || m.includes('ffmpeg'))
+    return 'Conversione audio fallita. Prova con un altro video.';
   return 'Impossibile scaricare il video. Prova con un altro link o carica l\'MP3 manualmente.';
 }
 
