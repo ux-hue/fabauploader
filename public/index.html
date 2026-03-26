@@ -1488,41 +1488,35 @@ async function checkYt() {
   }
 
   try {
-    const data = await innertubePlayer(videoId);
-    const status = data.playabilityStatus?.status;
-    if (status && status !== 'OK') {
-      const reason = data.playabilityStatus?.reason || status;
-      wrap.innerHTML = `<div class="badge err" style="margin:0">❌ ${esc(reason)}</div>`;
+    // Proxy server-side per bypassare CORS — solo metadati, nessun audio scaricato
+    const r = await fetch('/api/yt-info', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ videoId })
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      wrap.innerHTML = `<div class="badge err" style="margin:0">❌ ${esc(d.error)}</div>`;
       btn.disabled = false; btn.textContent = '🔍 Cerca';
       return;
     }
 
-    const audioFmt = pickBestAudio(data);
-    if (!audioFmt) throw new Error('Nessun formato audio disponibile.');
+    ytInfo = { videoId, url, title: d.title, duration: d.duration, thumbnail: d.thumbnail, audioUrl: d.audioUrl, mimeType: d.mimeType };
 
-    const d = data.videoDetails || {};
-    const title = d.title || 'Audio da YouTube';
-    const duration = parseInt(d.lengthSeconds) || 0;
-    const thumbnails = d.thumbnail?.thumbnails || [];
-    const thumbnail = thumbnails[thumbnails.length - 1]?.url || null;
-
-    ytInfo = { videoId, url, title, duration, thumbnail, audioUrl: audioFmt.url };
-
-    const dur = duration ? fmtTime(duration) : '';
+    const dur = d.duration ? fmtTime(d.duration) : '';
     wrap.innerHTML = `
       <div class="yt-preview">
-        ${thumbnail ? `<img class="yt-thumb" src="${esc(thumbnail)}" onerror="this.style.display='none'"/>` : '<div class="yt-thumb" style="background:#e2e8f0;display:flex;align-items:center;justify-content:center;font-size:22px">🎵</div>'}
+        ${d.thumbnail ? `<img class="yt-thumb" src="${esc(d.thumbnail)}" onerror="this.style.display='none'"/>` : '<div class="yt-thumb" style="background:#e2e8f0;display:flex;align-items:center;justify-content:center;font-size:22px">🎵</div>'}
         <div class="yt-meta">
-          <div class="yt-vtitle">${esc(title)}</div>
+          <div class="yt-vtitle">${esc(d.title)}</div>
           ${dur ? `<div class="yt-vdur">⏱ ${dur}</div>` : ''}
         </div>
       </div>
       <label class="field-label" style="margin-top:10px">Titolo su Faba</label>
-      <input class="inp" type="text" id="yt-custom-title" value="${esc(title)}" maxlength="60" style="margin-bottom:10px;padding:11px 14px;font-size:14px"/>
+      <input class="inp" type="text" id="yt-custom-title" value="${esc(d.title)}" maxlength="60" style="margin-bottom:10px;padding:11px 14px;font-size:14px"/>
       <button class="yt-add-btn" onclick="addFromYoutube()">➕ Aggiungi alla coda</button>`;
   } catch(e) {
-    wrap.innerHTML = `<div class="badge err" style="margin:0">❌ ${esc(e.message)}</div>`;
-    document.getElementById('yt-help').classList.add('show');
+    wrap.innerHTML = `<div class="badge err" style="margin:0">❌ Errore di rete</div>`;
   }
   btn.disabled = false;
   btn.textContent = '🔍 Cerca';
@@ -1533,7 +1527,8 @@ async function addFromYoutube() {
   const title = document.getElementById('yt-custom-title')?.value.trim() || ytInfo.title;
   fileList.push({
     isYoutube: true,
-    youtubeAudioUrl: ytInfo.audioUrl,  // direct URL, downloaded by browser
+    youtubeAudioUrl: ytInfo.audioUrl,
+    mimeType: ytInfo.mimeType,
     file: { name: title + ' (YouTube)', size: 0 },
     title, id: nextId++, status: 'wait', msg: '',
     duration: ytInfo.duration || null
@@ -1633,7 +1628,7 @@ async function startUpload() {
 
         item.msg = 'Invio a Faba…'; item.pct = 72; renderUploadQueue();
 
-        const audioFile = new File([blob], (item.title || 'audio') + '.webm', { type: blob.type || 'audio/webm' });
+        const audioFile = new File([blob], (item.title || 'audio') + '.webm', { type: item.mimeType || 'audio/webm' });
         const fd = new FormData();
         fd.append('shareId', shareId);
         fd.append('author', author);
