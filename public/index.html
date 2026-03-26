@@ -1504,6 +1504,7 @@ async function checkYt() {
     ytInfo = { videoId, url, title: d.title, duration: d.duration, thumbnail: d.thumbnail, audioUrl: d.audioUrl, mimeType: d.mimeType };
 
     const dur = d.duration ? fmtTime(d.duration) : '';
+    const noAudio = !d.audioUrl;
     wrap.innerHTML = `
       <div class="yt-preview">
         ${d.thumbnail ? `<img class="yt-thumb" src="${esc(d.thumbnail)}" onerror="this.style.display='none'"/>` : '<div class="yt-thumb" style="background:#e2e8f0;display:flex;align-items:center;justify-content:center;font-size:22px">🎵</div>'}
@@ -1512,9 +1513,10 @@ async function checkYt() {
           ${dur ? `<div class="yt-vdur">⏱ ${dur}</div>` : ''}
         </div>
       </div>
+      ${noAudio ? `<div class="badge err" style="margin:8px 0">⚠️ Audio non disponibile per questo video dal server. Scarica l'MP3 manualmente e caricalo.</div>` : `
       <label class="field-label" style="margin-top:10px">Titolo su Faba</label>
       <input class="inp" type="text" id="yt-custom-title" value="${esc(d.title)}" maxlength="60" style="margin-bottom:10px;padding:11px 14px;font-size:14px"/>
-      <button class="yt-add-btn" onclick="addFromYoutube()">➕ Aggiungi alla coda</button>`;
+      <button class="yt-add-btn" onclick="addFromYoutube()">➕ Aggiungi alla coda</button>`}`;
   } catch(e) {
     wrap.innerHTML = `<div class="badge err" style="margin:0">❌ Errore di rete</div>`;
   }
@@ -1615,26 +1617,32 @@ async function startUpload() {
     try {
       let r;
       if (isYt) {
-        // Browser downloads the audio directly from YouTube (its own IP — no bot blocks)
-        item.msg = 'Download audio…'; item.pct = 20; renderUploadQueue();
+        if (item.youtubeAudioUrl) {
+          // Caso normale: browser scarica direttamente l'URL audio (IP residenziale)
+          item.msg = 'Download audio…'; item.pct = 20; renderUploadQueue();
 
-        const blob = await downloadAudioBlob(item.youtubeAudioUrl, pct => {
-          item.pct = 20 + Math.round(pct * 50);
-          item.msg = `Download audio… ${Math.round(pct * 100)}%`;
-          document.getElementById(`pf-${item.id}`)?.style.setProperty('width', item.pct + '%');
-          const lbl = document.getElementById(`pl-${item.id}`);
-          if (lbl) lbl.textContent = item.msg;
-        });
+          const blob = await downloadAudioBlob(item.youtubeAudioUrl, pct => {
+            item.pct = 20 + Math.round(pct * 50);
+            item.msg = `Download audio… ${Math.round(pct * 100)}%`;
+            document.getElementById(`pf-${item.id}`)?.style.setProperty('width', item.pct + '%');
+            const lbl = document.getElementById(`pl-${item.id}`);
+            if (lbl) lbl.textContent = item.msg;
+          });
 
-        item.msg = 'Invio a Faba…'; item.pct = 72; renderUploadQueue();
+          item.msg = 'Invio a Faba…'; item.pct = 72; renderUploadQueue();
 
-        const audioFile = new File([blob], (item.title || 'audio') + '.webm', { type: item.mimeType || 'audio/webm' });
-        const fd = new FormData();
-        fd.append('shareId', shareId);
-        fd.append('author', author);
-        fd.append('title', item.title);
-        fd.append('audio', audioFile);
-        r = await fetch('/api/upload', { method: 'POST', body: fd });
+          const ext = (item.mimeType || 'audio/webm').includes('mp4') ? 'mp4' : 'webm';
+          const audioFile = new File([blob], (item.title || 'audio') + '.' + ext, { type: item.mimeType || 'audio/webm' });
+          const fd = new FormData();
+          fd.append('shareId', shareId);
+          fd.append('author', author);
+          fd.append('title', item.title);
+          fd.append('audio', audioFile);
+          r = await fetch('/api/upload', { method: 'POST', body: fd });
+        } else {
+          // Fallback: nessun audioUrl disponibile — errore chiaro
+          throw new Error('URL audio non disponibile per questo video. Prova a caricare l\'MP3 manualmente.');
+        }
       } else {
         const fd = new FormData();
         fd.append('shareId', shareId);
