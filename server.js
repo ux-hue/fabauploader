@@ -48,11 +48,15 @@ function extractShareId(input = '') {
 async function loadPage(shareId) {
   const resp = await axios.get(`${BASE}${shareId}`, {
     maxRedirects: 0,
-    validateStatus: s => s < 400,
+    validateStatus: s => s < 500,
     headers: { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1' }
   });
 
-  if (resp.status !== 302) throw new Error(`Link non valido o scaduto (HTTP ${resp.status})`);
+  // 404 / 410 / 200 (non-redirect) = link expired or invalid
+  if (resp.status === 404 || resp.status === 410)
+    throw new Error('LINK_SCADUTO');
+  if (resp.status !== 302)
+    throw new Error('LINK_SCADUTO');
 
   let xsrf = null, sess = null;
   for (const c of resp.headers['set-cookie'] || []) {
@@ -62,7 +66,7 @@ async function loadPage(shareId) {
     if (s) sess = s[1];
   }
   const location = resp.headers['location'];
-  if (!xsrf || !sess || !location) throw new Error('Sessione non ottenuta. Link scaduto?');
+  if (!xsrf || !sess || !location) throw new Error('LINK_SCADUTO');
   return { xsrf, sess, location };
 }
 
@@ -76,7 +80,7 @@ async function fetchForm(xsrf, sess, location) {
   const dom  = new JSDOM(resp.data);
   const doc  = dom.window.document;
   const form = doc.getElementById('form');
-  if (!form) throw new Error('Form non trovato. Il link è scaduto.');
+  if (!form) throw new Error('LINK_SCADUTO');
 
   const actionUrl = form.getAttribute('action');
   const tokenEl   = doc.querySelector('input[name="_token"]');
@@ -177,6 +181,7 @@ function humanError(raw) {
     'STORAGE_FULL':      'Spazio esaurito 🔴 — hai raggiunto il limite massimo di minuti del tuo Faba•Me. Vai sull\'app MyFaba, seleziona il personaggio e rimuovi alcune tracce per liberare spazio, poi riprova.',
     'DURATION_EXCEEDED': 'Spazio insufficiente 🟡 — questo file è più lungo dello spazio rimanente. Prova con un file più corto oppure libera spazio nell\'app MyFaba.',
     'FILE_TOO_LARGE':    'File troppo grande anche dopo la conversione. Prova a spezzarlo in più parti (max ~60 min per traccia).',
+    'LINK_SCADUTO':      '🔗 Link scaduto — questo link di invito non è più valido (dura 24 ore). Apri MyFaba → Faba+Me → Aggiungi traccia → Invita a registrare per generarne uno nuovo.',
   };
   if (map[raw]) return map[raw];
   if (raw.startsWith('FABA_ERROR_')) return `Errore dal server Faba (codice ${raw.replace('FABA_ERROR_','')}) — riprova tra qualche secondo.`;
@@ -184,36 +189,46 @@ function humanError(raw) {
 }
 
 
-/* ── YouTube via @distube/ytdl-core (Android InnerTube client) ────────────── */
+/* ── YouTube via youtubei.js (InnerTube API — no watch.html parsing) ─────── */
 //
-// Uses the Android InnerTube API client which doesn't require PO tokens
-// and works from server IPs without bot detection.
+// youtubei.js talks directly to YouTube's internal InnerTube API.
+// No HTML page parsing → immune to watch.html changes.
+// Maintained actively: github.com/LuanRT/YouTube.js
 //
 
-let ytdl;
-try {
-  ytdl = require('@distube/ytdl-core');
-} catch(e) {
-  console.warn('ytdl-core not installed, YouTube disabled');
+let Innertube;
+let innertubeInstance = null; // reuse across requests
+
+async function getInnertube() {
+  if (!innertubeInstance) {
+    if (!Innertube) {
+      const mod = await import('youtubei.js');
+      Innertube = mod.Innertube;
+    }
+    innertubeInstance = await Innertube.create({
+      fetch: (input, init) => {
+        // Node.js fetch polyfill — youtubei.js supports native fetch in Node 18+
+        return fetch(input, init);
+      }
+    });
+  }
+  return innertubeInstance;
 }
 
-// Get video info (title, thumbnail, duration) without downloading
+// Get video info (title, thumbnail, duration)
 app.post('/api/youtube-info', async (req, res) => {
   const { url } = req.body;
   if (!url || !/youtube\.com|youtu\.be/.test(url))
     return res.status(400).json({ ok: false, error: 'URL YouTube non valido.' });
-  if (!ytdl) return res.status(500).json({ ok: false, error: 'YouTube non disponibile sul server.' });
-
   try {
-    const info = await ytdl.getBasicInfo(url, {
-      requestOptions: { headers: { 'User-Agent': 'com.google.android.youtube/19.09.37 (Linux; U; Android 11)' } }
-    });
-    const d = info.videoDetails;
+    const yt = await getInnertube();
+    const info = await yt.getBasicInfo(url, 'ANDROID');
+    const d = info.basic_info;
     res.json({
       ok: true,
-      title: d.title || 'Audio da YouTube',
-      duration: parseInt(d.lengthSeconds) || 0,
-      thumbnail: d.thumbnails?.slice(-1)[0]?.url || null,
+      title:     d.title     || 'Audio da YouTube',
+      duration:  d.duration  || 0,
+      thumbnail: d.thumbnail?.[0]?.url || null,
     });
   } catch(e) {
     console.error('yt-info error:', e.message);
@@ -221,45 +236,46 @@ app.post('/api/youtube-info', async (req, res) => {
   }
 });
 
-// Download audio + convert + upload to Faba (all server-side)
+// Download audio + convert to WAV + upload to Faba — all server-side
 app.post('/api/youtube-upload', async (req, res) => {
   const { url, shareId, author, title } = req.body;
   if (!url || !shareId || !author || !title)
     return res.status(400).json({ ok: false, error: 'Dati mancanti.' });
-  if (!ytdl) return res.status(500).json({ ok: false, error: 'YouTube non disponibile sul server.' });
 
   try {
     console.log(`YouTube download: ${url}`);
+    const yt = await getInnertube();
+    const info = await yt.getBasicInfo(url, 'ANDROID');
 
-    // Stream audio directly to ffmpeg for conversion to WAV
+    // Pick best audio-only format
+    const formats = info.streaming_data?.adaptive_formats || [];
+    const audioFmt = formats
+      .filter(f => f.has_audio && !f.has_video)
+      .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0))[0];
+
+    if (!audioFmt) throw new Error('Nessun formato audio trovato per questo video.');
+
+    const audioUrl = audioFmt.decipher(yt.session.player);
+
+    // Stream from URL → ffmpeg → WAV buffer
     const wavBuf = await new Promise((resolve, reject) => {
       const tmpOut = path.join(os.tmpdir(), `fab_yt_${Date.now()}.wav`);
-      const stream = ytdl(url, {
-        filter: 'audioonly',
-        quality: 'lowestaudio',
-        requestOptions: { headers: { 'User-Agent': 'com.google.android.youtube/19.09.37 (Linux; U; Android 11)' } }
-      });
-
       const { spawn } = require('child_process');
       const ff = spawn('ffmpeg', [
-        '-i', 'pipe:0',
+        '-y', '-i', audioUrl,
         '-acodec', 'pcm_s16le', '-ac', '1', '-ar', '22050',
         '-f', 'wav', tmpOut
       ]);
-
-      stream.pipe(ff.stdin);
-      stream.on('error', reject);
       ff.stderr.on('data', () => {});
       ff.on('close', code => {
         if (code !== 0) { reject(new Error('Conversione audio fallita.')); return; }
         try { const buf = fs.readFileSync(tmpOut); fs.unlinkSync(tmpOut); resolve(buf); }
         catch(e) { reject(e); }
       });
+      ff.on('error', reject);
     });
 
-    const sizeMB = (wavBuf.length / 1024 / 1024).toFixed(1);
-    console.log(`YouTube WAV size: ${sizeMB} MB`);
-
+    console.log(`YouTube WAV: ${(wavBuf.length / 1024 / 1024).toFixed(1)} MB`);
     const { xsrf, sess, location } = await loadPage(shareId);
     const { actionUrl, _token, cookie } = await fetchForm(xsrf, sess, location);
     const { duration } = await uploadWav(actionUrl, cookie, _token, wavBuf, author, title);
@@ -273,14 +289,16 @@ app.post('/api/youtube-upload', async (req, res) => {
 
 function ytHumanError(msg = '') {
   const m = msg.toLowerCase();
-  if (m.includes('sign in') || m.includes('bot') || m.includes('login'))
-    return 'YouTube ha bloccato la richiesta. Il video potrebbe richiedere login o essere con restrizioni.';
-  if (m.includes('private')) return 'Il video è privato.';
+  if (m.includes('sign in') || m.includes('bot') || m.includes('login') || m.includes('confirm'))
+    return 'YouTube ha bloccato la richiesta. Prova con un altro video o carica l\'MP3 manualmente.';
+  if (m.includes('private'))      return 'Il video è privato.';
   if (m.includes('unavailable') || m.includes('not available')) return 'Il video non è disponibile.';
-  if (m.includes('copyright')) return 'Il video è bloccato per copyright.';
-  if (m.includes('age')) return 'Il video ha restrizioni di età.';
-  if (m.includes('members')) return 'Il video è riservato agli iscritti al canale.';
-  return `Impossibile scaricare il video. Prova con un altro link o carica l'MP3 manualmente.`;
+  if (m.includes('copyright'))    return 'Il video è bloccato per copyright.';
+  if (m.includes('age'))          return 'Il video ha restrizioni di età.';
+  if (m.includes('members'))      return 'Il video è riservato agli iscritti al canale.';
+  if (m.includes('formato') || m.includes('format') || m.includes('no audio'))
+    return 'Formato audio non trovato per questo video. Prova con un altro link.';
+  return 'Impossibile scaricare il video. Prova con un altro link o carica l\'MP3 manualmente.';
 }
 
 /* ── API routes ───────────────────────────────────────────────────────────── */
@@ -300,7 +318,7 @@ app.post('/api/validate', async (req, res) => {
     }
     res.json({ ok: true, shareId, expiresLabel, usedSeconds, maxSeconds });
   } catch (e) {
-    res.status(400).json({ ok: false, error: e.message });
+    res.status(400).json({ ok: false, error: humanError(e.message) });
   }
 });
 
