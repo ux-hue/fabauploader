@@ -193,16 +193,40 @@ function humanError(raw) {
 
 /* ── YouTube via yt-dlp ───────────────────────────────────────────────────── */
 //
-// yt-dlp is already installed in the Docker image.
-// It handles all client negotiation, PO tokens, and signature deciphering
-// internally — no manual client config needed.
-// Default client in 2026: android_vr (no PO token required from server IPs).
+// yt-dlp handles all YouTube client negotiation.
+// From server IPs (Render/AWS) YouTube requires authenticated cookies.
+// Set the YOUTUBE_COOKIES env var on Render with the contents of cookies.txt
+// exported from Chrome with "Get cookies.txt LOCALLY" while logged into YouTube.
 //
 
 const YTDLP = '/usr/local/bin/yt-dlp';
 const { execFile, spawn } = require('child_process');
 const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
+
+// Write cookies from env var to disk on startup (Render env vars can't be files)
+const COOKIES_FILE = path.join(os.tmpdir(), 'yt_cookies.txt');
+(function initCookies() {
+  const cookiesEnv = process.env.YOUTUBE_COOKIES;
+  if (cookiesEnv) {
+    try {
+      fs.writeFileSync(COOKIES_FILE, cookiesEnv, 'utf8');
+      console.log('✅ YouTube cookies loaded from env var');
+    } catch(e) {
+      console.error('❌ Failed to write YouTube cookies:', e.message);
+    }
+  } else {
+    console.warn('⚠️  YOUTUBE_COOKIES env var not set — YouTube may fail from server IPs');
+  }
+})();
+
+function ytdlpArgs(extra = []) {
+  const args = ['--no-playlist', '--no-warnings'];
+  if (fs.existsSync(COOKIES_FILE)) {
+    args.push('--cookies', COOKIES_FILE);
+  }
+  return [...args, ...extra];
+}
 
 function extractVideoId(url) {
   const m = url.match(/(?:v=|youtu\.be\/|\/v\/|\/embed\/)([A-Za-z0-9_-]{11})/);
@@ -215,11 +239,11 @@ function ytdlpUrl(videoId) {
 
 // Get video metadata (title, duration, thumbnail) — fast, no download
 async function ytdlpInfo(videoId) {
-  const args = [
-    '--no-playlist', '--no-warnings', '--skip-download',
+  const args = ytdlpArgs([
+    '--skip-download',
     '--print', '%(title)s\n%(duration)s\n%(thumbnail)s',
     ytdlpUrl(videoId)
-  ];
+  ]);
   const { stdout } = await execFileAsync(YTDLP, args, { timeout: 30_000 });
   const [title, durationStr, thumbnail] = stdout.trim().split('\n');
   return {
@@ -234,12 +258,11 @@ function ytdlpDownloadWav(videoId) {
   return new Promise((resolve, reject) => {
     const tmpOut = path.join(os.tmpdir(), `fab_yt_${Date.now()}.wav`);
 
-    const ytdlp = spawn(YTDLP, [
-      '--no-playlist', '--no-warnings',
+    const ytdlp = spawn(YTDLP, ytdlpArgs([
       '-f', 'bestaudio',
-      '-o', '-',            // output to stdout
+      '-o', '-',
       ytdlpUrl(videoId)
-    ]);
+    ]));
 
     const ff = spawn('ffmpeg', [
       '-y', '-i', 'pipe:0',
@@ -251,7 +274,6 @@ function ytdlpDownloadWav(videoId) {
 
     let ytErr = '';
     ytdlp.stderr.on('data', d => { ytErr += d.toString(); });
-
     let ffErr = '';
     ff.stderr.on('data', d => { ffErr += d.toString(); });
 
@@ -277,23 +299,6 @@ function ytdlpDownloadWav(videoId) {
       } catch(e) { reject(e); }
     });
   });
-}
-
-function parseYtdlpError(stderr = '') {
-  const s = stderr.toLowerCase();
-  if (s.includes('sign in') || s.includes('login') || s.includes('private'))
-    return 'Il video è privato o richiede accesso.';
-  if (s.includes('copyright') || s.includes('blocked'))
-    return 'Il video è bloccato per copyright.';
-  if (s.includes('not available') || s.includes('unavailable'))
-    return 'Il video non è disponibile in questa regione.';
-  if (s.includes('members only'))
-    return 'Il video è riservato agli iscritti al canale.';
-  if (s.includes('age'))
-    return 'Il video ha restrizioni di età.';
-  if (s.includes('429') || s.includes('too many'))
-    return 'Troppe richieste a YouTube. Riprova tra qualche minuto.';
-  return 'Impossibile scaricare il video. Prova con un altro link o carica l\'MP3 manualmente.';
 }
 
 app.post('/api/youtube-info', async (req, res) => {
