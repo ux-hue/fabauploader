@@ -194,49 +194,83 @@ function humanError(raw) {
 /* ── API routes ───────────────────────────────────────────────────────────── */
 
 // InnerTube proxy — solo metadati (titolo, durata, thumbnail + URL audio)
-// Il server fa la richiesta a YouTube per conto del browser (bypassa CORS).
-// Payload < 50KB, nessun audio scaricato lato server.
 app.post('/api/yt-info', async (req, res) => {
   const { videoId } = req.body;
   if (!videoId || !/^[A-Za-z0-9_-]{11}$/.test(videoId))
     return res.status(400).json({ ok: false, error: 'ID video non valido.' });
 
   try {
+    // ANDROID_VR non richiede PO token — funziona da server IP
     const r = await axios.post(
       'https://www.youtube.com/youtubei/v1/player?prettyPrint=false',
       {
         videoId,
-        context: { client: { clientName: 'WEB', clientVersion: '2.20250312.04.00', hl: 'en', gl: 'US' } },
+        context: {
+          client: {
+            clientName: 'ANDROID_VR',
+            clientVersion: '1.56.21',
+            deviceMake: 'Oculus',
+            deviceModel: 'Quest 3',
+            androidSdkVersion: 32,
+            osName: 'Android',
+            osVersion: '12L',
+            hl: 'en', gl: 'US'
+          }
+        },
         racyCheckOk: true, contentCheckOk: true
       },
-      { headers: { 'Content-Type': 'application/json' }, timeout: 15_000 }
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'com.google.android.apps.youtube.vr.oculus/1.56.21 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip',
+          'X-YouTube-Client-Name': '28',
+          'X-YouTube-Client-Version': '1.56.21'
+        },
+        timeout: 15_000
+      }
     );
     const d = r.data;
     const status = d.playabilityStatus?.status;
-    if (status && status !== 'OK')
-      return res.json({ ok: false, error: d.playabilityStatus?.reason || status });
 
-    // Extract audio formats with direct URLs (no cipher needed for WEB client)
+    // Ottieni metadati base (funziona anche con UNPLAYABLE)
+    const det = d.videoDetails || {};
+    const thumbs = det.thumbnail?.thumbnails || [];
+    const title = det.title || 'Audio da YouTube';
+    const duration = parseInt(det.lengthSeconds) || 0;
+    const thumbnail = thumbs[thumbs.length - 1]?.url || null;
+
+    // Cerca URL audio diretto nei formati
     const fmts = [...(d.streamingData?.adaptiveFormats || []), ...(d.streamingData?.formats || [])]
       .filter(f => f.mimeType?.startsWith('audio/') && f.url)
       .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
 
-    if (!fmts.length)
-      return res.json({ ok: false, error: 'Nessun formato audio disponibile.' });
+    if (!fmts.length) {
+      // ANDROID_VR non ha dato audio — usa oEmbed solo per il titolo
+      // e restituiamo senza audioUrl, il browser userà il proxy download
+      if (!det.title) {
+        const oEmbed = await axios.get(`https://www.youtube.com/oembed?url=https://youtu.be/${videoId}&format=json`, { timeout: 8_000 });
+        return res.json({ ok: true, title: oEmbed.data.title || title, duration, thumbnail, audioUrl: null, mimeType: null });
+      }
+      return res.json({ ok: false, error: 'Nessun formato audio disponibile per questo video.' });
+    }
 
-    const det = d.videoDetails || {};
-    const thumbs = det.thumbnail?.thumbnails || [];
     res.json({
       ok: true,
-      title: det.title || 'Audio da YouTube',
-      duration: parseInt(det.lengthSeconds) || 0,
-      thumbnail: thumbs[thumbs.length - 1]?.url || null,
+      title,
+      duration,
+      thumbnail,
       audioUrl: fmts[0].url,
       mimeType: fmts[0].mimeType.split(';')[0]
     });
   } catch(e) {
     console.error('yt-info proxy error:', e.message);
-    res.status(500).json({ ok: false, error: 'Errore nel recupero del video.' });
+    // Fallback: prova oEmbed solo per titolo/thumbnail
+    try {
+      const oEmbed = await axios.get(`https://www.youtube.com/oembed?url=https://youtu.be/${videoId}&format=json`, { timeout: 8_000 });
+      res.json({ ok: true, title: oEmbed.data.title || 'Audio da YouTube', duration: 0, thumbnail: oEmbed.data.thumbnail_url || null, audioUrl: null, mimeType: null });
+    } catch(_) {
+      res.status(500).json({ ok: false, error: 'Errore nel recupero del video.' });
+    }
   }
 });
 
