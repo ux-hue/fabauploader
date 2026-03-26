@@ -201,55 +201,67 @@ function extractVideoId(url) {
   return m ? m[1] : null;
 }
 
-// Configurazioni client InnerTube
+// Configurazioni client InnerTube aggiornate a marzo 2026
+// Fonte: yt-dlp _base.py — android_vr e tv sono i client default senza PO token
 const INNERTUBE_CLIENTS = [
   {
-    name: 'IOS',
-    context: {
-      client: {
-        clientName: 'IOS',
-        clientVersion: '19.45.4',
-        deviceModel: 'iPhone16,2',
-        osVersion: '17.5.1.21F90',
-        hl: 'en', gl: 'US'
+    // android_vr — default yt-dlp, non richiede PO token
+    name: 'ANDROID_VR',
+    body: {
+      context: {
+        client: {
+          clientName: 'ANDROID_VR',
+          clientVersion: '1.56.21',
+          deviceMake: 'Oculus',
+          deviceModel: 'Quest 3',
+          androidSdkVersion: 32,
+          osName: 'Android',
+          osVersion: '12L',
+          hl: 'en', gl: 'US'
+        }
       }
     },
     headers: {
-      'User-Agent': 'com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X)',
-      'X-YouTube-Client-Name': '5',
-      'X-YouTube-Client-Version': '19.45.4',
+      'User-Agent': 'com.google.android.apps.youtube.vr.oculus/1.56.21 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip',
+      'X-YouTube-Client-Name': '28',
+      'X-YouTube-Client-Version': '1.56.21',
     }
   },
   {
-    name: 'ANDROID',
-    context: {
-      client: {
-        clientName: 'ANDROID',
-        clientVersion: '19.44.38',
-        androidSdkVersion: 34,
-        hl: 'en', gl: 'US'
+    // tv_downgraded — TVHTML5 version 4, no PO token needed, works from servers
+    name: 'TV_DOWNGRADED',
+    body: {
+      context: {
+        client: {
+          clientName: 'TVHTML5',
+          clientVersion: '4',
+          hl: 'en', gl: 'US'
+        }
       }
     },
     headers: {
-      'User-Agent': 'com.google.android.youtube/19.44.38 (Linux; U; Android 14)',
-      'X-YouTube-Client-Name': '3',
-      'X-YouTube-Client-Version': '19.44.38',
+      'User-Agent': 'Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version',
+      'X-YouTube-Client-Name': '7',
+      'X-YouTube-Client-Version': '4',
     }
   },
   {
-    name: 'WEB_EMBEDDED',
-    context: {
-      client: {
-        clientName: 'WEB_EMBEDDED_PLAYER',
-        clientVersion: '2.20240101',
-        hl: 'en', gl: 'US'
+    // tv — TVHTML5 latest, works without cookies
+    name: 'TV',
+    body: {
+      context: {
+        client: {
+          clientName: 'TVHTML5',
+          clientVersion: '7.20260114.12.00',
+          userAgent: 'Mozilla/5.0 (ChromiumStylePlatform) Cobalt/25.lts.30.1034943-gold (unlike Gecko), Unknown_TV_Unknown_0/Unknown (Unknown, Unknown)',
+          hl: 'en', gl: 'US'
+        }
       }
     },
     headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36',
-      'X-YouTube-Client-Name': '56',
-      'X-YouTube-Client-Version': '2.20240101',
-      'Origin': 'https://www.youtube.com',
+      'User-Agent': 'Mozilla/5.0 (ChromiumStylePlatform) Cobalt/25.lts.30.1034943-gold (unlike Gecko), Unknown_TV_Unknown_0/Unknown (Unknown, Unknown)',
+      'X-YouTube-Client-Name': '7',
+      'X-YouTube-Client-Version': '7.20260114.12.00',
     }
   }
 ];
@@ -260,9 +272,10 @@ async function fetchPlayerData(videoId) {
   for (const client of INNERTUBE_CLIENTS) {
     try {
       const body = {
+        ...client.body,
         videoId,
-        context: client.context,
-        playbackContext: { contentPlaybackContext: { signatureTimestamp: 0 } }
+        racyCheckOk: true,
+        contentCheckOk: true
       };
       const resp = await axios.post(INNERTUBE_URL, body, {
         headers: {
@@ -279,15 +292,11 @@ async function fetchPlayerData(videoId) {
       if (status === 'OK') {
         return { data: d, clientName: client.name };
       }
-      if (status === 'LOGIN_REQUIRED' || status === 'UNPLAYABLE' || status === 'ERROR') {
-        // try next client
-        continue;
-      }
     } catch(e) {
       console.log(`[yt] client=${client.name} error: ${e.message.slice(0, 80)}`);
     }
   }
-  return null; // tutti i client falliti
+  return null;
 }
 
 function parsePlayerData(data) {
