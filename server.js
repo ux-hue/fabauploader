@@ -301,6 +301,25 @@ function ytdlpDownloadWav(videoId) {
   });
 }
 
+function parseYtdlpError(stderr = '') {
+  const s = stderr.toLowerCase();
+  if (s.includes('sign in') || s.includes('confirm') || s.includes('bot'))
+    return 'YouTube richiede autenticazione. Imposta la variabile YOUTUBE_COOKIES su Render (vedi istruzioni).';
+  if (s.includes('private') || s.includes('login'))
+    return 'Il video è privato o richiede accesso.';
+  if (s.includes('copyright') || s.includes('blocked'))
+    return 'Il video è bloccato per copyright.';
+  if (s.includes('not available') || s.includes('unavailable'))
+    return 'Il video non è disponibile in questa regione.';
+  if (s.includes('members only'))
+    return 'Il video è riservato agli iscritti al canale.';
+  if (s.includes('age'))
+    return 'Il video ha restrizioni di età.';
+  if (s.includes('429') || s.includes('too many'))
+    return 'Troppe richieste a YouTube. Riprova tra qualche minuto.';
+  return 'Impossibile scaricare il video. Prova con un altro link o carica l\'MP3 manualmente.';
+}
+
 app.post('/api/youtube-info', async (req, res) => {
   const { url } = req.body;
   if (!url || !/youtube\.com|youtu\.be/.test(url))
