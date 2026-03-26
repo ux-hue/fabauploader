@@ -1409,7 +1409,66 @@ function dragEnd() {
 /* ── YouTube ── */
 function toggleYt() { document.getElementById('yt-panel').classList.toggle('open'); }
 
-/* ── YouTube — server-side via ytdl-core (Android client) ────────────────── */
+/* ── YouTube — 100% client-side via InnerTube API ───────────────────────────
+   Il browser chiama YouTube direttamente (IP residenziale = nessun blocco).
+   Il server non tocca mai YouTube.
+   Flusso: browser → InnerTube API → URL audio → download MP3 → /api/upload
+──────────────────────────────────────────────────────────────────────────── */
+
+function extractVideoId(ytUrl) {
+  const m = ytUrl.match(/(?:v=|youtu\.be\/|\/v\/|\/embed\/)([A-Za-z0-9_-]{11})/);
+  return m ? m[1] : null;
+}
+
+async function innertubePlayer(videoId) {
+  // Chiama InnerTube /player dal browser — l'IP del client non è flaggato
+  const body = {
+    videoId,
+    context: {
+      client: {
+        clientName: 'WEB',
+        clientVersion: '2.20250312.04.00',
+        hl: 'en', gl: 'US'
+      }
+    },
+    racyCheckOk: true,
+    contentCheckOk: true
+  };
+  const resp = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!resp.ok) throw new Error(`InnerTube HTTP ${resp.status}`);
+  return await resp.json();
+}
+
+function pickBestAudio(data) {
+  const fmts = [
+    ...(data.streamingData?.adaptiveFormats || []),
+    ...(data.streamingData?.formats || [])
+  ].filter(f => f.mimeType?.startsWith('audio/') && f.url);
+  // Prefer opus/webm at ~128kbps, fallback to anything with a direct URL
+  fmts.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+  return fmts[0] || null;
+}
+
+async function downloadAudioBlob(audioUrl, onProgress) {
+  const resp = await fetch(audioUrl);
+  if (!resp.ok) throw new Error(`Download HTTP ${resp.status}`);
+  const total = parseInt(resp.headers.get('Content-Length') || '0');
+  const reader = resp.body.getReader();
+  const chunks = [];
+  let received = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    if (total && onProgress) onProgress(received / total);
+  }
+  return new Blob(chunks, { type: 'audio/webm' });
+}
 
 async function checkYt() {
   const url = document.getElementById('yt-url').value.trim();
@@ -1421,32 +1480,49 @@ async function checkYt() {
   wrap.innerHTML = `<div class="yt-loading">🔍 Recupero informazioni video…</div>`;
   ytInfo = null;
 
+  const videoId = extractVideoId(url);
+  if (!videoId) {
+    wrap.innerHTML = `<div class="badge err" style="margin:0">❌ URL YouTube non valido.</div>`;
+    btn.disabled = false; btn.textContent = '🔍 Cerca';
+    return;
+  }
+
   try {
-    const r = await fetch('/api/youtube-info', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url })
-    });
-    const d = await r.json();
-    if (!d.ok) {
-      wrap.innerHTML = `<div class="badge err" style="margin:0">❌ ${esc(d.error)}</div>`;
-      document.getElementById('yt-help').classList.add('show');
-    } else {
-      ytInfo = { ...d, url };
-      const dur = d.duration ? fmtTime(d.duration) : '';
-      wrap.innerHTML = `
-        <div class="yt-preview">
-          ${d.thumbnail ? `<img class="yt-thumb" src="${esc(d.thumbnail)}" onerror="this.style.display='none'"/>` : '<div class="yt-thumb" style="background:#e2e8f0;display:flex;align-items:center;justify-content:center;font-size:22px">🎵</div>'}
-          <div class="yt-meta">
-            <div class="yt-vtitle">${esc(d.title)}</div>
-            ${dur ? `<div class="yt-vdur">⏱ ${dur}</div>` : ''}
-          </div>
-        </div>
-        <label class="field-label" style="margin-top:10px">Titolo su Faba</label>
-        <input class="inp" type="text" id="yt-custom-title" value="${esc(d.title)}" maxlength="60" style="margin-bottom:10px;padding:11px 14px;font-size:14px"/>
-        <button class="yt-add-btn" onclick="addFromYoutube()">➕ Aggiungi alla coda</button>`;
+    const data = await innertubePlayer(videoId);
+    const status = data.playabilityStatus?.status;
+    if (status && status !== 'OK') {
+      const reason = data.playabilityStatus?.reason || status;
+      wrap.innerHTML = `<div class="badge err" style="margin:0">❌ ${esc(reason)}</div>`;
+      btn.disabled = false; btn.textContent = '🔍 Cerca';
+      return;
     }
-  } catch (e) {
-    wrap.innerHTML = `<div class="badge err" style="margin:0">❌ Errore di rete</div>`;
+
+    const audioFmt = pickBestAudio(data);
+    if (!audioFmt) throw new Error('Nessun formato audio disponibile.');
+
+    const d = data.videoDetails || {};
+    const title = d.title || 'Audio da YouTube';
+    const duration = parseInt(d.lengthSeconds) || 0;
+    const thumbnails = d.thumbnail?.thumbnails || [];
+    const thumbnail = thumbnails[thumbnails.length - 1]?.url || null;
+
+    ytInfo = { videoId, url, title, duration, thumbnail, audioUrl: audioFmt.url };
+
+    const dur = duration ? fmtTime(duration) : '';
+    wrap.innerHTML = `
+      <div class="yt-preview">
+        ${thumbnail ? `<img class="yt-thumb" src="${esc(thumbnail)}" onerror="this.style.display='none'"/>` : '<div class="yt-thumb" style="background:#e2e8f0;display:flex;align-items:center;justify-content:center;font-size:22px">🎵</div>'}
+        <div class="yt-meta">
+          <div class="yt-vtitle">${esc(title)}</div>
+          ${dur ? `<div class="yt-vdur">⏱ ${dur}</div>` : ''}
+        </div>
+      </div>
+      <label class="field-label" style="margin-top:10px">Titolo su Faba</label>
+      <input class="inp" type="text" id="yt-custom-title" value="${esc(title)}" maxlength="60" style="margin-bottom:10px;padding:11px 14px;font-size:14px"/>
+      <button class="yt-add-btn" onclick="addFromYoutube()">➕ Aggiungi alla coda</button>`;
+  } catch(e) {
+    wrap.innerHTML = `<div class="badge err" style="margin:0">❌ ${esc(e.message)}</div>`;
+    document.getElementById('yt-help').classList.add('show');
   }
   btn.disabled = false;
   btn.textContent = '🔍 Cerca';
@@ -1457,7 +1533,7 @@ async function addFromYoutube() {
   const title = document.getElementById('yt-custom-title')?.value.trim() || ytInfo.title;
   fileList.push({
     isYoutube: true,
-    youtubeUrl: ytInfo.url,
+    youtubeAudioUrl: ytInfo.audioUrl,  // direct URL, downloaded by browser
     file: { name: title + ' (YouTube)', size: 0 },
     title, id: nextId++, status: 'wait', msg: '',
     duration: ytInfo.duration || null
@@ -1544,11 +1620,26 @@ async function startUpload() {
     try {
       let r;
       if (isYt) {
-        // Server downloads, converts, and uploads — all server-side via ytdl-core
-        r = await fetch('/api/youtube-upload', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: item.youtubeUrl, shareId, author, title: item.title })
+        // Browser downloads the audio directly from YouTube (its own IP — no bot blocks)
+        item.msg = 'Download audio…'; item.pct = 20; renderUploadQueue();
+
+        const blob = await downloadAudioBlob(item.youtubeAudioUrl, pct => {
+          item.pct = 20 + Math.round(pct * 50);
+          item.msg = `Download audio… ${Math.round(pct * 100)}%`;
+          document.getElementById(`pf-${item.id}`)?.style.setProperty('width', item.pct + '%');
+          const lbl = document.getElementById(`pl-${item.id}`);
+          if (lbl) lbl.textContent = item.msg;
         });
+
+        item.msg = 'Invio a Faba…'; item.pct = 72; renderUploadQueue();
+
+        const audioFile = new File([blob], (item.title || 'audio') + '.webm', { type: blob.type || 'audio/webm' });
+        const fd = new FormData();
+        fd.append('shareId', shareId);
+        fd.append('author', author);
+        fd.append('title', item.title);
+        fd.append('audio', audioFile);
+        r = await fetch('/api/upload', { method: 'POST', body: fd });
       } else {
         const fd = new FormData();
         fd.append('shareId', shareId);
