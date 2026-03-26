@@ -190,133 +190,110 @@ function humanError(raw) {
 
 
 
-/* ── YouTube via InnerTube API diretto (axios) ────────────────────────────── */
+
+/* ── YouTube via yt-dlp ───────────────────────────────────────────────────── */
 //
-// Chiama /youtubei/v1/player direttamente — nessun parsing HTML,
-// nessun wrapper che può crashare. Prova più client in sequenza.
+// yt-dlp is already installed in the Docker image.
+// It handles all client negotiation, PO tokens, and signature deciphering
+// internally — no manual client config needed.
+// Default client in 2026: android_vr (no PO token required from server IPs).
 //
+
+const YTDLP = '/usr/local/bin/yt-dlp';
+const { execFile, spawn } = require('child_process');
+const { promisify } = require('util');
+const execFileAsync = promisify(execFile);
 
 function extractVideoId(url) {
   const m = url.match(/(?:v=|youtu\.be\/|\/v\/|\/embed\/)([A-Za-z0-9_-]{11})/);
   return m ? m[1] : null;
 }
 
-// Configurazioni client InnerTube aggiornate a marzo 2026
-// Fonte: yt-dlp _base.py — android_vr e tv sono i client default senza PO token
-const INNERTUBE_CLIENTS = [
-  {
-    // android_vr — default yt-dlp, non richiede PO token
-    name: 'ANDROID_VR',
-    body: {
-      context: {
-        client: {
-          clientName: 'ANDROID_VR',
-          clientVersion: '1.56.21',
-          deviceMake: 'Oculus',
-          deviceModel: 'Quest 3',
-          androidSdkVersion: 32,
-          osName: 'Android',
-          osVersion: '12L',
-          hl: 'en', gl: 'US'
-        }
-      }
-    },
-    headers: {
-      'User-Agent': 'com.google.android.apps.youtube.vr.oculus/1.56.21 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip',
-      'X-YouTube-Client-Name': '28',
-      'X-YouTube-Client-Version': '1.56.21',
-    }
-  },
-  {
-    // tv_downgraded — TVHTML5 version 4, no PO token needed, works from servers
-    name: 'TV_DOWNGRADED',
-    body: {
-      context: {
-        client: {
-          clientName: 'TVHTML5',
-          clientVersion: '4',
-          hl: 'en', gl: 'US'
-        }
-      }
-    },
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version',
-      'X-YouTube-Client-Name': '7',
-      'X-YouTube-Client-Version': '4',
-    }
-  },
-  {
-    // tv — TVHTML5 latest, works without cookies
-    name: 'TV',
-    body: {
-      context: {
-        client: {
-          clientName: 'TVHTML5',
-          clientVersion: '7.20260114.12.00',
-          userAgent: 'Mozilla/5.0 (ChromiumStylePlatform) Cobalt/25.lts.30.1034943-gold (unlike Gecko), Unknown_TV_Unknown_0/Unknown (Unknown, Unknown)',
-          hl: 'en', gl: 'US'
-        }
-      }
-    },
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (ChromiumStylePlatform) Cobalt/25.lts.30.1034943-gold (unlike Gecko), Unknown_TV_Unknown_0/Unknown (Unknown, Unknown)',
-      'X-YouTube-Client-Name': '7',
-      'X-YouTube-Client-Version': '7.20260114.12.00',
-    }
-  }
-];
-
-const INNERTUBE_URL = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
-
-async function fetchPlayerData(videoId) {
-  for (const client of INNERTUBE_CLIENTS) {
-    try {
-      const body = {
-        ...client.body,
-        videoId,
-        racyCheckOk: true,
-        contentCheckOk: true
-      };
-      const resp = await axios.post(INNERTUBE_URL, body, {
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-          ...client.headers
-        },
-        timeout: 15_000
-      });
-      const d = resp.data;
-      const status = d?.playabilityStatus?.status;
-      console.log(`[yt] client=${client.name} status=${status}`);
-
-      if (status === 'OK') {
-        return { data: d, clientName: client.name };
-      }
-    } catch(e) {
-      console.log(`[yt] client=${client.name} error: ${e.message.slice(0, 80)}`);
-    }
-  }
-  return null;
+function ytdlpUrl(videoId) {
+  return `https://www.youtube.com/watch?v=${videoId}`;
 }
 
-function parsePlayerData(data) {
-  const details = data.videoDetails || {};
-  const title = details.title || 'Audio da YouTube';
-  const duration = parseInt(details.lengthSeconds) || 0;
-  const thumbnails = details.thumbnail?.thumbnails || [];
-  const thumbnail = thumbnails[thumbnails.length - 1]?.url || null;
-
-  // Trova il miglior formato audio
-  const allFormats = [
-    ...(data.streamingData?.adaptiveFormats || []),
-    ...(data.streamingData?.formats || [])
+// Get video metadata (title, duration, thumbnail) — fast, no download
+async function ytdlpInfo(videoId) {
+  const args = [
+    '--no-playlist', '--no-warnings', '--skip-download',
+    '--print', '%(title)s\n%(duration)s\n%(thumbnail)s',
+    ytdlpUrl(videoId)
   ];
-  const audioFormats = allFormats
-    .filter(f => f.mimeType?.startsWith('audio/') && f.url)
-    .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+  const { stdout } = await execFileAsync(YTDLP, args, { timeout: 30_000 });
+  const [title, durationStr, thumbnail] = stdout.trim().split('\n');
+  return {
+    title: title || 'Audio da YouTube',
+    duration: parseInt(durationStr) || 0,
+    thumbnail: (thumbnail && thumbnail !== 'NA') ? thumbnail : null,
+  };
+}
 
-  const audioUrl = audioFormats[0]?.url || null;
-  return { title, duration, thumbnail, audioUrl };
+// Download best audio → pipe through ffmpeg → WAV buffer
+function ytdlpDownloadWav(videoId) {
+  return new Promise((resolve, reject) => {
+    const tmpOut = path.join(os.tmpdir(), `fab_yt_${Date.now()}.wav`);
+
+    const ytdlp = spawn(YTDLP, [
+      '--no-playlist', '--no-warnings',
+      '-f', 'bestaudio',
+      '-o', '-',            // output to stdout
+      ytdlpUrl(videoId)
+    ]);
+
+    const ff = spawn('ffmpeg', [
+      '-y', '-i', 'pipe:0',
+      '-acodec', 'pcm_s16le', '-ac', '1', '-ar', '22050',
+      '-f', 'wav', tmpOut
+    ]);
+
+    ytdlp.stdout.pipe(ff.stdin);
+
+    let ytErr = '';
+    ytdlp.stderr.on('data', d => { ytErr += d.toString(); });
+
+    let ffErr = '';
+    ff.stderr.on('data', d => { ffErr += d.toString(); });
+
+    ytdlp.on('error', err => reject(new Error(`yt-dlp non trovato: ${err.message}`)));
+    ytdlp.on('close', code => {
+      if (code !== 0) {
+        ff.stdin.end();
+        reject(new Error(parseYtdlpError(ytErr)));
+      }
+    });
+
+    ff.on('error', err => reject(new Error(`ffmpeg error: ${err.message}`)));
+    ff.on('close', code => {
+      if (code !== 0) {
+        console.error('ffmpeg stderr:', ffErr.slice(-300));
+        reject(new Error('Conversione audio fallita.'));
+        return;
+      }
+      try {
+        const buf = fs.readFileSync(tmpOut);
+        try { fs.unlinkSync(tmpOut); } catch {}
+        resolve(buf);
+      } catch(e) { reject(e); }
+    });
+  });
+}
+
+function parseYtdlpError(stderr = '') {
+  const s = stderr.toLowerCase();
+  if (s.includes('sign in') || s.includes('login') || s.includes('private'))
+    return 'Il video è privato o richiede accesso.';
+  if (s.includes('copyright') || s.includes('blocked'))
+    return 'Il video è bloccato per copyright.';
+  if (s.includes('not available') || s.includes('unavailable'))
+    return 'Il video non è disponibile in questa regione.';
+  if (s.includes('members only'))
+    return 'Il video è riservato agli iscritti al canale.';
+  if (s.includes('age'))
+    return 'Il video ha restrizioni di età.';
+  if (s.includes('429') || s.includes('too many'))
+    return 'Troppe richieste a YouTube. Riprova tra qualche minuto.';
+  return 'Impossibile scaricare il video. Prova con un altro link o carica l\'MP3 manualmente.';
 }
 
 app.post('/api/youtube-info', async (req, res) => {
@@ -329,14 +306,11 @@ app.post('/api/youtube-info', async (req, res) => {
     return res.status(400).json({ ok: false, error: 'ID video non trovato nell\'URL.' });
 
   try {
-    const result = await fetchPlayerData(videoId);
-    if (!result) return res.status(400).json({ ok: false, error: 'Video non accessibile dal server. Prova a caricare l\'MP3 manualmente.' });
-
-    const { title, duration, thumbnail } = parsePlayerData(result.data);
-    res.json({ ok: true, title, duration, thumbnail });
+    const info = await ytdlpInfo(videoId);
+    res.json({ ok: true, ...info });
   } catch(e) {
     console.error('yt-info error:', e.message);
-    res.status(400).json({ ok: false, error: ytHumanError(e.message) });
+    res.status(400).json({ ok: false, error: parseYtdlpError(e.message) });
   }
 });
 
@@ -350,39 +324,10 @@ app.post('/api/youtube-upload', async (req, res) => {
     return res.status(400).json({ ok: false, error: 'ID video non trovato nell\'URL.' });
 
   try {
-    console.log(`[yt] downloading ${videoId}`);
-    const result = await fetchPlayerData(videoId);
-    if (!result) throw new Error('NO_CLIENTS');
+    console.log(`[yt-dlp] downloading ${videoId}`);
+    const wavBuf = await ytdlpDownloadWav(videoId);
+    console.log(`[yt-dlp] WAV: ${(wavBuf.length / 1024 / 1024).toFixed(1)} MB`);
 
-    const { audioUrl } = parsePlayerData(result.data);
-    if (!audioUrl) throw new Error('NO_FORMAT');
-    console.log(`[yt] audio URL via ${result.clientName}`);
-
-    const wavBuf = await new Promise((resolve, reject) => {
-      const tmpOut = path.join(os.tmpdir(), `fab_yt_${Date.now()}.wav`);
-      const { spawn } = require('child_process');
-      const ff = spawn('ffmpeg', [
-        '-y',
-        '-user_agent', 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15',
-        '-i', audioUrl,
-        '-acodec', 'pcm_s16le', '-ac', '1', '-ar', '22050',
-        '-f', 'wav', tmpOut
-      ]);
-      let ffErr = '';
-      ff.stderr.on('data', d => { ffErr += d.toString(); });
-      ff.on('close', code => {
-        if (code !== 0) {
-          console.error('ffmpeg stderr:', ffErr.slice(-400));
-          reject(new Error('FFMPEG_FAILED'));
-          return;
-        }
-        try { const buf = fs.readFileSync(tmpOut); fs.unlinkSync(tmpOut); resolve(buf); }
-        catch(e) { reject(e); }
-      });
-      ff.on('error', reject);
-    });
-
-    console.log(`[yt] WAV: ${(wavBuf.length / 1024 / 1024).toFixed(1)} MB`);
     const { xsrf, sess, location } = await loadPage(shareId);
     const { actionUrl, _token, cookie } = await fetchForm(xsrf, sess, location);
     const { duration } = await uploadWav(actionUrl, cookie, _token, wavBuf, author, title);
@@ -390,27 +335,9 @@ app.post('/api/youtube-upload', async (req, res) => {
 
   } catch(e) {
     console.error('yt-upload error:', e.message);
-    res.status(500).json({ ok: false, error: ytHumanError(e.message) });
+    res.status(500).json({ ok: false, error: e.message });
   }
 });
-
-function ytHumanError(msg = '') {
-  const m = msg.toLowerCase();
-  if (m === 'login_required' || m.includes('sign in') || m.includes('private'))
-    return 'Il video è privato o richiede accesso.';
-  if (m === 'unplayable' || m.includes('unavailable') || m.includes('not available'))
-    return 'Il video non è disponibile in questa regione o è stato rimosso.';
-  if (m === 'no_clients' || m.includes('tutti i client') || m.includes('non accessibile'))
-    return 'Il video non è scaricabile dal server. Prova a caricare l\'MP3 manualmente o usa un link YouTube diverso.';
-  if (m === 'no_format' || m.includes('decipher') || m.includes('audio url'))
-    return 'Formato audio non ottenibile. Prova con un altro video o carica l\'MP3 manualmente.';
-  if (m === 'ffmpeg_failed' || m.includes('conversione'))
-    return 'Errore nella conversione audio. Prova con un altro video.';
-  if (m.includes('copyright')) return 'Il video è bloccato per copyright.';
-  if (m.includes('age'))       return 'Il video ha restrizioni di età.';
-  if (m.includes('members'))   return 'Il video è riservato agli iscritti al canale.';
-  return 'Impossibile scaricare il video. Prova con un altro link o carica l\'MP3 manualmente.';
-}
 
 /* ── API routes ───────────────────────────────────────────────────────────── */
 // Validate link
