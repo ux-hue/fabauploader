@@ -286,7 +286,6 @@ function ytDownloadWav(videoId) {
 
 function ytErrMsg(s = '') {
   s = s.toLowerCase();
-  if (s.includes('sign in') || s.includes('bot')) return 'Autenticazione YouTube mancante — configura YOUTUBE_COOKIES su Render.';
   if (s.includes('private')) return 'Il video è privato.';
   if (s.includes('copyright') || s.includes('blocked')) return 'Il video è bloccato per copyright.';
   if (s.includes('unavailable') || s.includes('not available')) return 'Il video non è disponibile.';
@@ -294,40 +293,105 @@ function ytErrMsg(s = '') {
   return 'Impossibile scaricare il video. Prova con un altro link.';
 }
 
-// Route: info video
+const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
+const RAPIDAPI_HOST = 'youtube-to-mp315.p.rapidapi.com';
+
+// Chiama RapidAPI per ottenere info + MP3 URL
+async function rapidApiGetMp3(videoId) {
+  if (!RAPIDAPI_KEY) throw new Error('RAPIDAPI_KEY non configurata');
+
+  // Step 1: richiedi conversione
+  const r1 = await axios.get(`https://${RAPIDAPI_HOST}/dl`, {
+    params: { id: videoId },
+    headers: { 'x-rapidapi-key': RAPIDAPI_KEY, 'x-rapidapi-host': RAPIDAPI_HOST },
+    timeout: 30_000
+  });
+
+  const d = r1.data;
+  console.log(`[rapidapi] status=${d.status} title=${d.title}`);
+
+  if (d.status === 'ok' && d.link) {
+    return { title: d.title, duration: d.duration || 0, thumbnail: d.thumbnail || null, mp3Url: d.link };
+  }
+
+  // Alcuni video richiedono polling
+  if (d.status === 'processing' && d.id) {
+    for (let i = 0; i < 10; i++) {
+      await new Promise(r => setTimeout(r, 3000));
+      const r2 = await axios.get(`https://${RAPIDAPI_HOST}/status/${d.id}`, {
+        headers: { 'x-rapidapi-key': RAPIDAPI_KEY, 'x-rapidapi-host': RAPIDAPI_HOST },
+        timeout: 15_000
+      });
+      console.log(`[rapidapi] poll ${i+1}: status=${r2.data.status}`);
+      if (r2.data.status === 'ok' && r2.data.link) {
+        return { title: d.title, duration: d.duration || 0, thumbnail: d.thumbnail || null, mp3Url: r2.data.link };
+      }
+    }
+    throw new Error('Timeout conversione RapidAPI');
+  }
+
+  throw new Error(d.msg || 'RapidAPI: risposta inattesa');
+}
+
+// Route: info video (usa oEmbed per titolo + thumbnail, veloce)
 app.post('/api/yt-info', async (req, res) => {
   const { videoId } = req.body;
   if (!videoId || !/^[A-Za-z0-9_-]{11}$/.test(videoId))
     return res.status(400).json({ ok: false, error: 'ID video non valido.' });
   try {
-    const info = await ytInfo(videoId);
-    res.json({ ok: true, ...info });
+    // oEmbed è pubblico, non richiede auth — solo metadati base
+    const oe = await axios.get(`https://www.youtube.com/oembed?url=https://youtu.be/${videoId}&format=json`, { timeout: 10_000 });
+    res.json({ ok: true, title: oe.data.title || 'Audio da YouTube', duration: 0, thumbnail: oe.data.thumbnail_url || null });
   } catch(e) {
-    console.error('yt-info error:', e.message);
-    const msg = ytErrMsg(e.message);
-    const needsNotube = e.message.includes('bot') || e.message.includes('sign in') || e.message.includes('copyright');
-    res.status(400).json({ ok: false, error: msg, notubeUrl: needsNotube ? 'https://notube.link/it/youtube-app-322' : null });
+    // Se anche oEmbed fallisce il video è privato/inesistente
+    res.status(400).json({ ok: false, error: 'Video non trovato o privato.', notubeUrl: 'https://notube.link/it/youtube-app-322' });
   }
 });
 
-// Route: download + converti + carica su Faba
+// Route: download MP3 via RapidAPI + converti WAV + carica su Faba
 app.post('/api/youtube-upload', async (req, res) => {
   const { url, shareId, author, title } = req.body;
   if (!url || !shareId || !author || !title)
     return res.status(400).json({ ok: false, error: 'Dati mancanti.' });
   const videoId = extractVideoId(url);
   if (!videoId) return res.status(400).json({ ok: false, error: 'URL non valido.' });
+
   try {
-    console.log(`[yt] downloading ${videoId}`);
-    const wavBuf = await ytDownloadWav(videoId);
+    console.log(`[yt] RapidAPI download ${videoId}`);
+    const { mp3Url, title: ytTitle } = await rapidApiGetMp3(videoId);
+    console.log(`[yt] MP3 URL ottenuto`);
+
+    // Scarica MP3 e converti in WAV via ffmpeg
+    const wavBuf = await new Promise((resolve, reject) => {
+      const tmpOut = path.join(os.tmpdir(), `fab_yt_${Date.now()}.wav`);
+      const ff = require('child_process').spawn('ffmpeg', [
+        '-y', '-i', mp3Url,
+        '-acodec', 'pcm_s16le', '-ac', '1', '-ar', '22050',
+        '-f', 'wav', tmpOut
+      ]);
+      let ffErr = '';
+      ff.stderr.on('data', d => { ffErr += d; });
+      ff.on('close', code => {
+        if (code !== 0) { console.error('ffmpeg:', ffErr.slice(-200)); reject(new Error('Conversione audio fallita.')); return; }
+        try { const buf = fs.readFileSync(tmpOut); try{fs.unlinkSync(tmpOut);}catch{} resolve(buf); }
+        catch(e) { reject(e); }
+      });
+      ff.on('error', reject);
+    });
+
     console.log(`[yt] WAV: ${(wavBuf.length/1024/1024).toFixed(1)} MB`);
     const { xsrf, sess, location } = await loadPage(shareId);
     const { actionUrl, _token, cookie } = await fetchForm(xsrf, sess, location);
     const { duration } = await uploadWav(actionUrl, cookie, _token, wavBuf, author, title);
     res.json({ ok: true, duration });
+
   } catch(e) {
     console.error('[yt] upload error:', e.message);
-    res.status(500).json({ ok: false, error: ytErrMsg(e.message), notubeUrl: 'https://notube.link/it/youtube-app-322' });
+    const notubeUrl = 'https://notube.link/it/youtube-app-322';
+    if (e.message.includes('RAPIDAPI_KEY')) {
+      return res.status(500).json({ ok: false, error: 'Servizio YouTube non configurato. Scarica l\'MP3 manualmente da notube.link.', notubeUrl });
+    }
+    res.status(500).json({ ok: false, error: ytErrMsg(e.message), notubeUrl });
   }
 });
 
