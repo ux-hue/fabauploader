@@ -306,7 +306,7 @@ app.post('/api/yt-info', async (req, res) => {
     console.error('yt-info error:', e.message);
     const msg = ytErrMsg(e.message);
     const needsNotube = e.message.includes('bot') || e.message.includes('sign in') || e.message.includes('copyright');
-    res.status(400).json({ ok: false, error: msg, notubeUrl: needsNotube ? 'https://notube.net' : null });
+    res.status(400).json({ ok: false, error: msg, notubeUrl: needsNotube ? 'https://notube.link/it/youtube-app-322' : null });
   }
 });
 
@@ -327,7 +327,7 @@ app.post('/api/youtube-upload', async (req, res) => {
     res.json({ ok: true, duration });
   } catch(e) {
     console.error('[yt] upload error:', e.message);
-    res.status(500).json({ ok: false, error: ytErrMsg(e.message), notubeUrl: 'https://notube.net' });
+    res.status(500).json({ ok: false, error: ytErrMsg(e.message), notubeUrl: 'https://notube.link/it/youtube-app-322' });
   }
 });
 
