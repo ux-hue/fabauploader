@@ -1496,7 +1496,10 @@ async function checkYt() {
     });
     const d = await r.json();
     if (!d.ok) {
-      wrap.innerHTML = `<div class="badge err" style="margin:0">❌ ${esc(d.error)}</div>`;
+      const notubeBtn = d.notubeUrl
+        ? `<a href="${d.notubeUrl}" target="_blank" style="display:inline-block;margin-top:8px;padding:8px 14px;background:#FF5A35;color:#fff;border-radius:8px;font-size:12px;font-weight:800;text-decoration:none;">↗ Apri notube.net</a>`
+        : '';
+      wrap.innerHTML = `<div class="badge err" style="margin:0">${d.error}${notubeBtn}</div>`;
       btn.disabled = false; btn.textContent = '🔍 Cerca';
       return;
     }
