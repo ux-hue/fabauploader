@@ -191,97 +191,147 @@ function humanError(raw) {
 
 
 
-/* ── API routes ───────────────────────────────────────────────────────────── */
 
-// DEBUG: testa un singolo client InnerTube e ritorna il risultato dettagliato
-app.post('/api/yt-test', async (req, res) => {
-  const { videoId, client } = req.body;
-  if (!videoId || !client) return res.status(400).json({ error: 'Missing params' });
-  try {
-    const clientCtx = { clientName: client.clientName, clientVersion: client.clientVersion, hl: 'en', gl: 'US', ...(client.extra || {}) };
-    const r = await axios.post(
-      'https://www.youtube.com/youtubei/v1/player?prettyPrint=false',
-      { videoId, context: { client: clientCtx }, racyCheckOk: true, contentCheckOk: true },
-      { headers: { 'Content-Type': 'application/json', ...(client.headers || {}) }, timeout: 15_000 }
-    );
-    const d = r.data;
-    const status = d.playabilityStatus?.status;
-    const reason = d.playabilityStatus?.reason || '';
-    const fmts = [...(d.streamingData?.adaptiveFormats||[]), ...(d.streamingData?.formats||[])]
-      .filter(f => f.mimeType?.startsWith('audio/'));
-    const audioWithUrl = fmts.filter(f => f.url);
-    const audioWithCipher = fmts.filter(f => f.signatureCipher);
-    res.json({ status, reason, audioWithUrl: audioWithUrl.length, audioWithCipher: audioWithCipher.length, firstUrl: audioWithUrl[0]?.url?.slice(0,100) || null });
-  } catch(e) {
-    res.json({ status: 'ERROR', error: e.message, audioWithUrl: 0, audioWithCipher: 0 });
+/* ── YouTube via yt-dlp con cookie account dedicato ──────────────────────── */
+//
+// Usa un account Google dedicato all'app (non dell'utente).
+// Setup una-tantum: esporta cookies.txt dall'account → incolla in YOUTUBE_COOKIES su Render.
+//
+
+const { execFile, spawn } = require('child_process');
+const { promisify } = require('util');
+const execFileAsync = promisify(execFile);
+const YTDLP = '/usr/local/bin/yt-dlp';
+const COOKIES_FILE = path.join(os.tmpdir(), 'yt_cookies.txt');
+
+// Scrivi cookie dal env var su disco all'avvio
+// Supporta sia testo normale che base64 (utile se Render tronca le newline)
+(function initCookies() {
+  const c = process.env.YOUTUBE_COOKIES;
+  if (!c) {
+    console.warn('⚠️  YOUTUBE_COOKIES non impostato');
+    return;
   }
+  try {
+    // Prova a decodificare come base64, altrimenti usa testo normale
+    let content = c;
+    if (!c.includes('\t') && !c.includes('youtube.com')) {
+      // Sembra base64
+      content = Buffer.from(c, 'base64').toString('utf8');
+      console.log('📦 Cookie decodificati da base64');
+    }
+    fs.writeFileSync(COOKIES_FILE, content, 'utf8');
+    const lines = content.split('\n').filter(l => l.includes('youtube.com')).length;
+    console.log(`✅ YouTube cookies caricati (${lines} cookie per youtube.com)`);
+  } catch(e) {
+    console.error('❌ Errore caricamento cookie:', e.message);
+  }
+})();
+
+// DEBUG: verifica stato cookie
+app.get('/api/yt-cookie-status', (req, res) => {
+  const envSet = !!process.env.YOUTUBE_COOKIES;
+  const fileExists = fs.existsSync(COOKIES_FILE);
+  let lines = 0;
+  if (fileExists) {
+    const content = fs.readFileSync(COOKIES_FILE, 'utf8');
+    lines = content.split('\n').filter(l => l.includes('youtube.com')).length;
+  }
+  res.json({ envSet, fileExists, ytCookieLines: lines });
 });
 
-// InnerTube proxy — usa ANDROID_VR (confermato funzionante da server Render)
+
+function ytArgs(extra = []) {
+  const args = ['--no-playlist', '--no-warnings'];
+  if (fs.existsSync(COOKIES_FILE)) args.push('--cookies', COOKIES_FILE);
+  return [...args, ...extra];
+}
+
+function ytUrl(id) { return `https://www.youtube.com/watch?v=${id}`; }
+
+function extractVideoId(url) {
+  const m = url.match(/(?:v=|youtu\.be\/|\/v\/|\/embed\/)([A-Za-z0-9_-]{11})/);
+  return m ? m[1] : null;
+}
+
+// Info: titolo, durata, thumbnail
+async function ytInfo(videoId) {
+  const { stdout } = await execFileAsync(YTDLP,
+    ytArgs(['--skip-download', '--print', '%(title)s\n%(duration)s\n%(thumbnail)s', ytUrl(videoId)]),
+    { timeout: 30_000 }
+  );
+  const [title, dur, thumb] = stdout.trim().split('\n');
+  return { title: title || 'Audio da YouTube', duration: parseInt(dur)||0, thumbnail: thumb&&thumb!=='NA'?thumb:null };
+}
+
+// Download audio → WAV → upload a Faba (tutto server-side)
+function ytDownloadWav(videoId) {
+  return new Promise((resolve, reject) => {
+    const tmpOut = path.join(os.tmpdir(), `fab_yt_${Date.now()}.wav`);
+    const ytdlp = spawn(YTDLP, ytArgs(['-f', 'bestaudio', '-o', '-', ytUrl(videoId)]));
+    const ff = spawn('ffmpeg', ['-y', '-i', 'pipe:0', '-acodec', 'pcm_s16le', '-ac', '1', '-ar', '22050', '-f', 'wav', tmpOut]);
+    ytdlp.stdout.pipe(ff.stdin);
+    let ytErr = '';
+    ytdlp.stderr.on('data', d => { ytErr += d; });
+    ff.stderr.on('data', () => {});
+    ytdlp.on('error', e => reject(e));
+    ytdlp.on('close', code => { if (code !== 0) { ff.stdin.end(); reject(new Error(ytErrMsg(ytErr))); }});
+    ff.on('close', code => {
+      if (code !== 0) { reject(new Error('Conversione audio fallita.')); return; }
+      try { const buf = fs.readFileSync(tmpOut); try{fs.unlinkSync(tmpOut);}catch{} resolve(buf); }
+      catch(e) { reject(e); }
+    });
+  });
+}
+
+function ytErrMsg(s = '') {
+  s = s.toLowerCase();
+  if (s.includes('sign in') || s.includes('bot')) return 'Autenticazione YouTube mancante — configura YOUTUBE_COOKIES su Render.';
+  if (s.includes('private')) return 'Il video è privato.';
+  if (s.includes('copyright') || s.includes('blocked')) return 'Il video è bloccato per copyright.';
+  if (s.includes('unavailable') || s.includes('not available')) return 'Il video non è disponibile.';
+  if (s.includes('age')) return 'Il video ha restrizioni di età.';
+  return 'Impossibile scaricare il video. Prova con un altro link.';
+}
+
+// Route: info video
 app.post('/api/yt-info', async (req, res) => {
   const { videoId } = req.body;
   if (!videoId || !/^[A-Za-z0-9_-]{11}$/.test(videoId))
     return res.status(400).json({ ok: false, error: 'ID video non valido.' });
-
   try {
-    const r = await axios.post(
-      'https://www.youtube.com/youtubei/v1/player?prettyPrint=false',
-      {
-        videoId,
-        context: { client: {
-          clientName: 'ANDROID_VR', clientVersion: '1.56.21',
-          deviceMake: 'Oculus', deviceModel: 'Quest 3',
-          androidSdkVersion: 32, osName: 'Android', osVersion: '12L',
-          hl: 'en', gl: 'US'
-        }},
-        racyCheckOk: true, contentCheckOk: true
-      },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': 'com.google.android.apps.youtube.vr.oculus/1.56.21 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip',
-          'X-YouTube-Client-Name': '28',
-          'X-YouTube-Client-Version': '1.56.21'
-        },
-        timeout: 15_000
-      }
-    );
-
-    const d = r.data;
-    const status = d.playabilityStatus?.status;
-
-    if (status && status !== 'OK') {
-      const reason = d.playabilityStatus?.reason || '';
-      if (status === 'LOGIN_REQUIRED')
-        return res.json({ ok: false, error: 'Questo video non è accessibile dal server (restrizioni geografiche o di rete). Prova un altro video o carica l\'MP3 manualmente.' });
-      if (status === 'UNPLAYABLE')
-        return res.json({ ok: false, error: `Video non disponibile: ${reason || 'restrizioni sconosciute'}.` });
-      return res.json({ ok: false, error: reason || status });
-    }
-
-    const fmts = [...(d.streamingData?.adaptiveFormats||[]), ...(d.streamingData?.formats||[])]
-      .filter(f => f.mimeType?.startsWith('audio/') && f.url)
-      .sort((a, b) => (b.bitrate||0) - (a.bitrate||0));
-
-    if (!fmts.length)
-      return res.json({ ok: false, error: 'Nessun formato audio disponibile.' });
-
-    const det = d.videoDetails || {};
-    const thumbs = det.thumbnail?.thumbnails || [];
-    res.json({
-      ok: true,
-      title:    det.title || 'Audio da YouTube',
-      duration: parseInt(det.lengthSeconds) || 0,
-      thumbnail: thumbs[thumbs.length-1]?.url || null,
-      audioUrl:  fmts[0].url,
-      mimeType:  fmts[0].mimeType.split(';')[0]
-    });
+    const info = await ytInfo(videoId);
+    res.json({ ok: true, ...info });
   } catch(e) {
     console.error('yt-info error:', e.message);
-    res.status(500).json({ ok: false, error: 'Errore nel recupero del video.' });
+    const msg = ytErrMsg(e.message);
+    const needsNotube = e.message.includes('bot') || e.message.includes('sign in') || e.message.includes('copyright');
+    res.status(400).json({ ok: false, error: msg, notubeUrl: needsNotube ? 'https://notube.net' : null });
   }
 });
 
+// Route: download + converti + carica su Faba
+app.post('/api/youtube-upload', async (req, res) => {
+  const { url, shareId, author, title } = req.body;
+  if (!url || !shareId || !author || !title)
+    return res.status(400).json({ ok: false, error: 'Dati mancanti.' });
+  const videoId = extractVideoId(url);
+  if (!videoId) return res.status(400).json({ ok: false, error: 'URL non valido.' });
+  try {
+    console.log(`[yt] downloading ${videoId}`);
+    const wavBuf = await ytDownloadWav(videoId);
+    console.log(`[yt] WAV: ${(wavBuf.length/1024/1024).toFixed(1)} MB`);
+    const { xsrf, sess, location } = await loadPage(shareId);
+    const { actionUrl, _token, cookie } = await fetchForm(xsrf, sess, location);
+    const { duration } = await uploadWav(actionUrl, cookie, _token, wavBuf, author, title);
+    res.json({ ok: true, duration });
+  } catch(e) {
+    console.error('[yt] upload error:', e.message);
+    res.status(500).json({ ok: false, error: ytErrMsg(e.message), notubeUrl: 'https://notube.net' });
+  }
+});
+
+/* ── API routes ───────────────────────────────────────────────────────────── */
 // Validate link
 app.post('/api/validate', async (req, res) => {
   const shareId = extractShareId(req.body.url || '');
