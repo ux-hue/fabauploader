@@ -251,12 +251,14 @@ app.post('/api/yt-info', async (req, res) => {
     const status = d.playabilityStatus?.status;
 
     if (status && status !== 'OK') {
-      const reason = d.playabilityStatus?.reason || '';
+      const NOTUBE = `<a href="https://notube.net" target="_blank" style="color:#FF5A35">notube.net</a>`;
       if (status === 'LOGIN_REQUIRED')
-        return res.json({ ok: false, error: 'Questo video non è accessibile dal server (restrizioni geografiche o di rete). Prova un altro video o carica l\'MP3 manualmente.' });
-      if (status === 'UNPLAYABLE')
-        return res.json({ ok: false, error: `Video non disponibile: ${reason || 'restrizioni sconosciute'}.` });
-      return res.json({ ok: false, error: reason || status });
+        return res.json({ ok: false, error: `Questo video non è scaricabile dal server. Scaricalo come MP3 da ${NOTUBE} e poi caricalo qui.`, notubeUrl: `https://notube.net/en/youtube-app-270` });
+      if (status === 'UNPLAYABLE') {
+        const reason = d.playabilityStatus?.reason || '';
+        return res.json({ ok: false, error: `Video non disponibile${reason ? ': ' + reason : ''}. Prova a scaricarlo da ${NOTUBE} e caricarlo come MP3.`, notubeUrl: `https://notube.net/en/youtube-app-270` });
+      }
+      return res.json({ ok: false, error: d.playabilityStatus?.reason || status });
     }
 
     const fmts = [...(d.streamingData?.adaptiveFormats||[]), ...(d.streamingData?.formats||[])]
