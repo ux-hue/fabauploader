@@ -1454,7 +1454,10 @@ function pickBestAudio(data) {
 }
 
 async function downloadAudioBlob(audioUrl, onProgress) {
-  const resp = await fetch(audioUrl);
+  // L'URL googlevideo.com viene bloccato da CORS se chiamato direttamente.
+  // Lo facciamo passare dal nostro server proxy.
+  const proxyUrl = '/api/yt-audio?url=' + encodeURIComponent(audioUrl);
+  const resp = await fetch(proxyUrl);
   if (!resp.ok) throw new Error(`Download HTTP ${resp.status}`);
   const total = parseInt(resp.headers.get('Content-Length') || '0');
   const reader = resp.body.getReader();
