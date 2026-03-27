@@ -296,41 +296,73 @@ function ytErrMsg(s = '') {
 const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
 const RAPIDAPI_HOST = 'youtube-to-mp315.p.rapidapi.com';
 
-// Chiama RapidAPI per ottenere info + MP3 URL
+// Chiama RapidAPI per ottenere MP3 URL
 async function rapidApiGetMp3(videoId) {
   if (!RAPIDAPI_KEY) throw new Error('RAPIDAPI_KEY non configurata');
 
-  // Step 1: richiedi conversione
-  const r1 = await axios.get(`https://${RAPIDAPI_HOST}/dl`, {
-    params: { id: videoId },
-    headers: { 'x-rapidapi-key': RAPIDAPI_KEY, 'x-rapidapi-host': RAPIDAPI_HOST },
-    timeout: 30_000
-  });
+  const headers = { 'x-rapidapi-key': RAPIDAPI_KEY, 'x-rapidapi-host': RAPIDAPI_HOST };
 
-  const d = r1.data;
-  console.log(`[rapidapi] status=${d.status} title=${d.title}`);
-
-  if (d.status === 'ok' && d.link) {
-    return { title: d.title, duration: d.duration || 0, thumbnail: d.thumbnail || null, mp3Url: d.link };
-  }
-
-  // Alcuni video richiedono polling
-  if (d.status === 'processing' && d.id) {
-    for (let i = 0; i < 10; i++) {
-      await new Promise(r => setTimeout(r, 3000));
-      const r2 = await axios.get(`https://${RAPIDAPI_HOST}/status/${d.id}`, {
-        headers: { 'x-rapidapi-key': RAPIDAPI_KEY, 'x-rapidapi-host': RAPIDAPI_HOST },
-        timeout: 15_000
-      });
-      console.log(`[rapidapi] poll ${i+1}: status=${r2.data.status}`);
-      if (r2.data.status === 'ok' && r2.data.link) {
-        return { title: d.title, duration: d.duration || 0, thumbnail: d.thumbnail || null, mp3Url: r2.data.link };
-      }
+  // Prova endpoint /dl con parametro id
+  try {
+    const r = await axios.get(`https://${RAPIDAPI_HOST}/dl`, {
+      params: { id: videoId },
+      headers, timeout: 30_000
+    });
+    console.log(`[rapidapi] /dl response:`, JSON.stringify(r.data).slice(0, 300));
+    const d = r.data;
+    if (d.link || d.url || d.mp3) {
+      const mp3Url = d.link || d.url || d.mp3;
+      return { title: d.title || 'Audio da YouTube', duration: d.duration || 0, thumbnail: d.thumbnail || null, mp3Url };
     }
-    throw new Error('Timeout conversione RapidAPI');
+    if (d.status === 'processing' && d.id) {
+      return await pollStatus(d.id, d.title, headers);
+    }
+  } catch(e) {
+    console.log(`[rapidapi] /dl failed: ${e.message}`);
   }
 
-  throw new Error(d.msg || 'RapidAPI: risposta inattesa');
+  // Prova endpoint /download con parametro url
+  try {
+    const r = await axios.get(`https://${RAPIDAPI_HOST}/download`, {
+      params: { url: `https://www.youtube.com/watch?v=${videoId}` },
+      headers, timeout: 30_000
+    });
+    console.log(`[rapidapi] /download response:`, JSON.stringify(r.data).slice(0, 300));
+    const d = r.data;
+    const mp3Url = d.link || d.url || d.mp3 || d.audio;
+    if (mp3Url) return { title: d.title || 'Audio da YouTube', duration: d.duration || 0, thumbnail: d.thumbnail || null, mp3Url };
+  } catch(e) {
+    console.log(`[rapidapi] /download failed: ${e.message}`);
+  }
+
+  // Prova endpoint /mp3 con parametro url
+  try {
+    const r = await axios.get(`https://${RAPIDAPI_HOST}/mp3`, {
+      params: { url: `https://www.youtube.com/watch?v=${videoId}` },
+      headers, timeout: 30_000
+    });
+    console.log(`[rapidapi] /mp3 response:`, JSON.stringify(r.data).slice(0, 300));
+    const d = r.data;
+    const mp3Url = d.link || d.url || d.mp3 || d.audio;
+    if (mp3Url) return { title: d.title || 'Audio da YouTube', duration: d.duration || 0, thumbnail: d.thumbnail || null, mp3Url };
+  } catch(e) {
+    console.log(`[rapidapi] /mp3 failed: ${e.message}`);
+  }
+
+  throw new Error('Nessun endpoint RapidAPI ha funzionato — controlla i log');
+}
+
+async function pollStatus(id, title, headers) {
+  for (let i = 0; i < 10; i++) {
+    await new Promise(r => setTimeout(r, 3000));
+    const r = await axios.get(`https://${RAPIDAPI_HOST}/status/${id}`, { headers, timeout: 15_000 });
+    console.log(`[rapidapi] poll ${i+1}:`, JSON.stringify(r.data).slice(0, 200));
+    const d = r.data;
+    const mp3Url = d.link || d.url || d.mp3;
+    if (mp3Url) return { title: title || d.title || 'Audio da YouTube', duration: 0, thumbnail: null, mp3Url };
+    if (d.status === 'failed' || d.status === 'error') throw new Error('RapidAPI: conversione fallita');
+  }
+  throw new Error('Timeout conversione RapidAPI');
 }
 
 // Route: info video (usa oEmbed per titolo + thumbnail, veloce)
