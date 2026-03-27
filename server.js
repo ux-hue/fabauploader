@@ -193,7 +193,31 @@ function humanError(raw) {
 
 /* ── API routes ───────────────────────────────────────────────────────────── */
 
-// DEBUG: testa un singolo client InnerTube e ritorna il risultato dettagliato
+// Proxy audio stream da URL googlevideo.com (CORS bloccato dal browser direttamente)
+app.get('/api/yt-audio', async (req, res) => {
+  const { url } = req.query;
+  if (!url) return res.status(400).send('Missing url');
+  // Verifica che sia un URL googlevideo legittimo
+  if (!url.startsWith('https://') || !url.includes('googlevideo.com'))
+    return res.status(400).send('URL non valido');
+  try {
+    const r = await axios.get(url, {
+      responseType: 'stream',
+      timeout: 120_000,
+      headers: {
+        'User-Agent': 'com.google.android.apps.youtube.vr.oculus/1.56.21 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip',
+        'Referer': 'https://www.youtube.com/'
+      }
+    });
+    res.set('Content-Type', r.headers['content-type'] || 'audio/webm');
+    if (r.headers['content-length']) res.set('Content-Length', r.headers['content-length']);
+    res.set('Access-Control-Allow-Origin', '*');
+    r.data.pipe(res);
+  } catch(e) {
+    console.error('yt-audio proxy error:', e.message);
+    res.status(500).send('Errore nel download audio');
+  }
+});
 app.post('/api/yt-test', async (req, res) => {
   const { videoId, client } = req.body;
   if (!videoId || !client) return res.status(400).json({ error: 'Missing params' });
