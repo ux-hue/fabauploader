@@ -761,10 +761,10 @@ html,body{
             Apri MyFaba → Faba+Me → Aggiungi traccia → <strong>Invita a registrare</strong>, poi copia il link qui.
           </p>
           <label class="field-label">Link</label>
-          <input class="inp" type="url" id="inp-link"
+          <input class="inp" type="text" id="inp-link"
             placeholder="https://studio.myfaba.com/record/…"
             autocomplete="off" autocorrect="off" spellcheck="false"
-            onkeydown="if(event.key==='Enter')verifyLink()" oninput="dtLinkChanged()"/>
+            onkeydown="if(event.key==='Enter')verifyLink()" oninput="onLinkChange(this);dtLinkChanged()" onpaste="setTimeout(()=>onLinkChange(this),0)"/>
           <button class="btn-verify-link" id="btn-verify" style="margin-top:12px"
             onclick="verifyLink()" disabled>
             <span id="verify-lbl">🔗 Verifica link</span>
@@ -920,10 +920,11 @@ html,body{
     <p class="panel-sub">Apri MyFaba → Faba+Me → Aggiungi traccia → Invita a registrare, poi copia il link qui.</p>
 
     <label class="field-label">Link d'invito</label>
-    <input class="inp" type="url" id="inp-link"
+    <input class="inp" type="text" id="inp-link"
       placeholder="https://studio.myfaba.com/record/…"
       autocomplete="off" autocorrect="off" spellcheck="false"
-      onkeydown="if(event.key==='Enter')verifyLink()"/>
+      onkeydown="if(event.key==='Enter')verifyLink()"
+      oninput="onLinkChange(this)" onpaste="setTimeout(()=>onLinkChange(this),0)"/>
 
     <button class="btn-verify-link" id="btn-verify" style="margin-top:14px"
       onclick="verifyLink()" disabled>
@@ -1243,32 +1244,38 @@ function updateStorageBar() {
 /* ══════════════════════════════════════════════════════
    STEP 1 — LINK
 ══════════════════════════════════════════════════════ */
-const inpLink = document.getElementById('inp-link');
 
-// Estrae l'URL MyFaba da qualsiasi testo incollato (es. messaggio di condivisione Faba)
-inpLink.addEventListener('paste', e => {
-  const pasted = (e.clipboardData || window.clipboardData).getData('text');
-  const m = pasted.match(/https?:\/\/studio\.myfaba\.com\/record\/[A-Za-z0-9_-]+/);
-  if (m && pasted.trim() !== m[0]) {
-    e.preventDefault();
-    inpLink.value = m[0];
-    inpLink.dispatchEvent(new Event('input'));
+function extractFabaUrl(text) {
+  const m = text.match(/https?:\/\/studio\.myfaba\.com\/record\/[A-Za-z0-9_-]+/);
+  return m ? m[0] : null;
+}
+
+function onLinkChange(el) {
+  const field = el || document.getElementById('inp-link');
+  const val = field.value;
+  const extracted = extractFabaUrl(val);
+  if (extracted && extracted !== val.trim()) {
+    field.value = extracted;
   }
-});
-
-inpLink.addEventListener('input', () => {
-  document.getElementById('btn-verify').disabled = !inpLink.value.trim();
+  document.querySelectorAll('.btn-verify-link').forEach(b => b.disabled = !field.value.trim());
   shareId = null;
   checkCanProceed();
-});
+}
+
+const inpLink = document.getElementById('inp-link');
+inpLink.addEventListener('paste', () => setTimeout(() => onLinkChange(inpLink), 0));
+inpLink.addEventListener('input', () => onLinkChange(inpLink));
 inpLink.addEventListener('keydown', e => e.key === 'Enter' && verifyLink());
 
 async function verifyLink() {
-  const url = inpLink.value.trim();
+  // Legge dal campo che ha un valore (mobile o desktop)
+  const allFields = document.querySelectorAll('#inp-link');
+  const activeField = [...allFields].find(f => f.value.trim()) || allFields[0];
+  const url = activeField.value.trim();
   if (!url) return;
-  const btn = document.getElementById('btn-verify');
+  const btns = document.querySelectorAll('.btn-verify-link');
   const lbl = document.getElementById('verify-lbl');
-  btn.disabled = true;
+  btns.forEach(b => b.disabled = true);
   lbl.innerHTML = '<span class="spin-sm"></span> Verifica…';
   document.getElementById('link-badge').innerHTML = '';
 
@@ -1299,7 +1306,7 @@ async function verifyLink() {
   }
 
   lbl.textContent = '🔗 Verifica link';
-  btn.disabled = !inpLink.value.trim();
+  btns.forEach(b => b.disabled = !activeField.value.trim());
 }
 
 /* ══════════════════════════════════════════════════════
@@ -1747,7 +1754,8 @@ function isDesktop() { return window.innerWidth >= 768; }
 function dtLinkChanged() {
   // reset shareId if user edits the link
   shareId = null;
-  document.getElementById('btn-verify').disabled = !document.getElementById('inp-link').value.trim();
+  const anyVal = [...document.querySelectorAll('#inp-link')].some(f => f.value.trim());
+  document.querySelectorAll('.btn-verify-link').forEach(b => b.disabled = !anyVal);
   dtUpdateRight();
 }
 
