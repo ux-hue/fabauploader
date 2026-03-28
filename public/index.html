@@ -764,7 +764,7 @@ html,body{
           <input class="inp" type="text" id="inp-link"
             placeholder="https://studio.myfaba.com/record/…"
             autocomplete="off" autocorrect="off" spellcheck="false"
-            onkeydown="if(event.key==='Enter')verifyLink()" oninput="onLinkChange(this);dtLinkChanged()" onpaste="setTimeout(()=>onLinkChange(this),0)"/>
+            onkeydown="if(event.key==='Enter')verifyLink()" oninput="onLinkChange(this);dtLinkChanged()"/>
           <button class="btn-verify-link" id="btn-verify" style="margin-top:12px"
             onclick="verifyLink()" disabled>
             <span id="verify-lbl">🔗 Verifica link</span>
@@ -1263,7 +1263,6 @@ function onLinkChange(el) {
 }
 
 async function verifyLink() {
-  // Usa il campo visibile (offsetParent !== null = visibile nel DOM)
   const allFields = [...document.querySelectorAll('#inp-link')];
   const activeField = allFields.find(f => f.offsetParent !== null) || allFields[0];
   const url = activeField.value.trim();
@@ -1272,7 +1271,8 @@ async function verifyLink() {
   const lbl = document.getElementById('verify-lbl');
   btns.forEach(b => b.disabled = true);
   lbl.innerHTML = '<span class="spin-sm"></span> Verifica…';
-  document.getElementById('link-badge').innerHTML = '';
+  // Aggiorna tutti i badge (mobile e desktop)
+  document.querySelectorAll('#link-badge').forEach(b => b.innerHTML = '');
 
   try {
     const r = await fetch('/api/validate', {
@@ -1286,18 +1286,18 @@ async function verifyLink() {
       storageMax = d.maxSeconds;
       uploadedSeconds = 0;
       const exp = d.expiresLabel ? ` — scade ${d.expiresLabel}` : '';
-      document.getElementById('link-badge').innerHTML =
-        `<div class="badge ok">✅ Link valido${exp}</div>`;
+      document.querySelectorAll('#link-badge').forEach(b => b.innerHTML =
+        `<div class="badge ok">✅ Link valido${exp}</div>`);
       updateStorageBar();
       checkCanProceed();
       dtUpdateRight();
     } else {
-      document.getElementById('link-badge').innerHTML =
-        `<div class="badge err">❌ ${esc(d.error)}</div>`;
+      document.querySelectorAll('#link-badge').forEach(b => b.innerHTML =
+        `<div class="badge err">❌ ${esc(d.error)}</div>`);
     }
   } catch (e) {
-    document.getElementById('link-badge').innerHTML =
-      `<div class="badge err">❌ Errore di rete</div>`;
+    document.querySelectorAll('#link-badge').forEach(b => b.innerHTML =
+      `<div class="badge err">❌ Errore di rete</div>`);
   }
 
   lbl.textContent = '🔗 Verifica link';
