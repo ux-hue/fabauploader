@@ -313,23 +313,25 @@ async function rapidApiGetMp3(videoId) {
   const d1 = r1.data;
   console.log(`[rapidapi] /download:`, JSON.stringify(d1).slice(0, 300));
 
-  // Se già disponibile
+  // Se già disponibile nella risposta iniziale
   if ((d1.status === 'AVAILABLE' || d1.status === 'ok') && d1.downloadUrl) {
     return { title: d1.title || 'Audio da YouTube', mp3Url: d1.downloadUrl };
   }
 
+  // downloadUrl presente ma status ancora CONVERTING — aspetta un po' poi poll
+  const initialUrl = d1.downloadUrl;
   if (!d1.id) throw new Error(`RapidAPI: nessun id ricevuto — ${JSON.stringify(d1).slice(0,100)}`);
 
-  // Step 2: polling su /status
+  // Step 2: polling su /status/{id}
   for (let i = 0; i < 15; i++) {
     await new Promise(r => setTimeout(r, 4000));
-    const r2 = await axios.get(`https://${RAPIDAPI_HOST}/status`, {
-      params: { id: d1.id }, headers, timeout: 15_000
+    const r2 = await axios.get(`https://${RAPIDAPI_HOST}/status/${d1.id}`, {
+      headers, timeout: 15_000
     });
     const d2 = r2.data;
-    console.log(`[rapidapi] poll ${i+1}: status=${d2.status}`);
-    if ((d2.status === 'AVAILABLE' || d2.status === 'ok') && d2.downloadUrl) {
-      return { title: d1.title || d2.title || 'Audio da YouTube', mp3Url: d2.downloadUrl };
+    console.log(`[rapidapi] poll ${i+1}: status=${d2.status} url=${d2.downloadUrl?.slice(0,40)||'none'}`);
+    if ((d2.status === 'AVAILABLE' || d2.status === 'ok') && (d2.downloadUrl || initialUrl)) {
+      return { title: d1.title || d2.title || 'Audio da YouTube', mp3Url: d2.downloadUrl || initialUrl };
     }
     if (d2.status === 'FAILED' || d2.status === 'error') throw new Error('RapidAPI: conversione fallita');
   }
