@@ -1602,8 +1602,8 @@ async function startUpload() {
       if (item.pct < 65) {
         item.pct += 4 + Math.random() * 6;
         if (isYt) {
-          // YouTube messages set manually at key steps — interval only fills gaps
-          if (item.pct < 30 && item.msg !== 'Download da notube…') item.msg = 'Download da notube…';
+          if (item.pct < 30) item.msg = 'Download audio…';
+          else if (item.pct < 60) item.msg = 'Elaborazione…';
         } else {
           item.msg = item.pct < 35 ? 'Conversione audio…' : item.pct < 65 ? 'Invio a Faba cloud…' : 'Finalizzazione…';
         }
@@ -1634,6 +1634,10 @@ async function startUpload() {
         item.status = 'ok'; item.pct = 100;
         const dur = d.duration || item.duration || 0;
         if (dur) { uploadedSeconds += dur; updateStorageBar(); }
+        // Rimuovi dalla coda dopo breve pausa
+        renderUploadQueue();
+        await sleep(1200);
+        fileList = fileList.filter(f => f.id !== item.id);
       } else {
         item.status = 'err'; item.msg = d.error || 'Errore sconosciuto'; allOk = false;
       }
