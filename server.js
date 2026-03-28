@@ -53,6 +53,7 @@ async function loadPage(shareId) {
   });
 
   // 404 / 410 / 200 (non-redirect) = link expired or invalid
+  if (resp.status === 403) throw new Error('STORAGE_FULL');
   if (resp.status === 404 || resp.status === 410)
     throw new Error('LINK_SCADUTO');
   if (resp.status !== 302)
@@ -178,7 +179,7 @@ async function uploadWav(actionUrl, cookie, _token, wavBuf, author, title) {
 /* ── human-readable error mapper ─────────────────────────────────────────── */
 function humanError(raw) {
   const map = {
-    'STORAGE_FULL':      'Spazio esaurito 🔴 — hai raggiunto il limite massimo di minuti del tuo Faba•Me. Vai sull\'app MyFaba, seleziona il personaggio e rimuovi alcune tracce per liberare spazio, poi riprova.',
+    'STORAGE_FULL':      '🔴 Spazio esaurito — il tuo Faba•Me ha raggiunto il limite di tracce. Apri l\'app MyFaba, vai sul personaggio, rimuovi alcune tracce per liberare spazio, poi genera un nuovo link d\'invito.',
     'DURATION_EXCEEDED': 'Spazio insufficiente 🟡 — questo file è più lungo dello spazio rimanente. Prova con un file più corto oppure libera spazio nell\'app MyFaba.',
     'FILE_TOO_LARGE':    'File troppo grande anche dopo la conversione. Prova a spezzarlo in più parti (max ~60 min per traccia).',
     'LINK_SCADUTO':      '🔗 Link scaduto — questo link di invito non è più valido (dura 24 ore). Apri MyFaba → Faba+Me → Aggiungi traccia → Invita a registrare per generarne uno nuovo.',
