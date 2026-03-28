@@ -1,0 +1,1840 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="theme-color" content="#FF5A35"/>
+<title>Faba+Me Uploader</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800;900;1000&family=Pacifico&display=swap" rel="stylesheet"/>
+<style>
+/* ── tokens ── */
+:root{
+  --c-orange:#FF5A35;
+  --c-orange2:#FF8C42;
+  --c-red:#E8442F;
+  --c-green:#10B981;
+  --c-green2:#059669;
+  --c-blue:#3B82F6;
+  --c-yellow:#F59E0B;
+  --bg:#EDEAE6;
+  --surface:#FFFFFF;
+  --surface2:#F5F2EF;
+  --border:#E0D9D2;
+  --text:#1C1917;
+  --text2:#78716C;
+  --text3:#A8A29E;
+  --radius:20px;
+  --radius-sm:12px;
+  --shadow:0 2px 16px rgba(0,0,0,.07);
+  --shadow-lg:0 8px 40px rgba(0,0,0,.12);
+}
+
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+
+html,body{
+  font-family:'Nunito',sans-serif;
+  background:var(--bg);
+  color:var(--text);
+  height:100%;
+  overflow:hidden; /* prevent page scroll — each step fits the screen */
+}
+
+/* ── header — compact ── */
+.header{
+  background:linear-gradient(160deg,var(--c-orange) 0%,var(--c-red) 100%);
+  padding:14px 20px 32px;
+  text-align:center;
+  position:relative;
+  overflow:hidden;
+  flex-shrink:0;
+}
+.header::before{
+  content:'';position:absolute;inset:0;
+  background:radial-gradient(ellipse at 75% 10%,rgba(255,255,255,.15) 0%,transparent 55%);
+}
+.header-inner{position:relative;z-index:1}
+.logo-row{
+  display:flex;align-items:center;justify-content:center;gap:8px;margin-bottom:3px;
+}
+.logo-sparkle{font-size:18px;color:rgba(255,255,255,.9)}
+.logo-name{
+  font-size:18px;font-weight:900;color:#fff;letter-spacing:-.2px;
+}
+.header-sub{font-size:12px;color:rgba(255,255,255,.75);font-weight:600}
+
+/* ── full-screen flex layout ── */
+.app{
+  display:flex;
+  flex-direction:column;
+  /* svh = small viewport height = always the visible portion on iOS Safari.
+     This ensures the bottom nav is never under Safari's toolbar. */
+  height:100svh;
+  height:100dvh; /* modern browsers */
+  height:100vh;  /* ultimate fallback */
+  overflow:hidden;
+}
+
+/* ── step rail + main — scrollable container ── */
+.step-rail{
+  background:var(--surface);
+  margin:-18px 0 0;
+  border-radius:24px 24px 0 0;
+  padding:18px 20px 0;
+  position:relative;
+  z-index:10;
+  flex:1;
+  display:flex;
+  flex-direction:column;
+  overflow:hidden;
+  min-height:0;
+}
+
+/* step dots row */
+.step-dots{
+  display:flex;align-items:center;
+  margin-bottom:4px;
+}
+
+/* no more step-seg wrapper — dots and lines are direct flex children */
+.step-dot{
+  width:32px;height:32px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:13px;font-weight:900;
+  flex-shrink:0;
+  transition:all .35s cubic-bezier(.34,1.56,.64,1);
+  position:relative;z-index:1;
+}
+.step-dot.done{
+  background:var(--c-orange);color:#fff;
+}
+.step-dot.active{
+  background:var(--c-orange);color:#fff;
+  transform:scale(1.08);
+  box-shadow:0 0 0 5px rgba(255,90,53,.18);
+}
+.step-dot.future{
+  background:transparent;
+  border:2px solid var(--border);
+  color:var(--text3);
+}
+
+.step-line{flex:1;height:1.5px;margin:0 4px;transition:background .4s}
+.step-line.done{background:var(--c-orange)}
+.step-line.future{background:var(--border)}
+
+/*
+ * Labels: mirror the EXACT same flex structure as dots.
+ * Each label is 32px wide (same as its dot), flex-shrink:0,
+ * centred under it. Lines between them are flex:1 spacers (invisible).
+ * This guarantees perfect alignment regardless of container width.
+ */
+.step-labels{
+  display:flex;align-items:center;
+  margin-bottom:14px;
+}
+.step-label{
+  width:32px;flex-shrink:0;
+  text-align:center;
+  font-size:10px;font-weight:800;
+  white-space:nowrap;
+  transition:color .3s;
+}
+.step-label.active{color:var(--c-orange)}
+.step-label.done{color:var(--c-orange)}
+.step-label.future{color:var(--text3)}
+/* invisible spacers between labels (same width as the dot-lines) */
+.step-label-gap{flex:1;height:0}
+
+/* ── main content — scrollable when needed, otherwise fits ── */
+.main{
+  background:var(--surface);
+  /* No horizontal padding here — inherited from step-rail's 20px padding.
+     Adding it here would double up and make content narrower than stepper. */
+  padding:0 0 24px;
+  flex:1;
+  overflow-y:auto;
+  -webkit-overflow-scrolling:touch;
+  min-height:0;
+}
+
+/* ── step panels ── */
+.step-panel{
+  display:none;
+  padding-top:4px;
+  animation:slideIn .28s cubic-bezier(.25,.46,.45,.94) both;
+}
+.step-panel.active{display:block}
+.step-panel.slide-back{animation:slideBack .28s cubic-bezier(.25,.46,.45,.94) both}
+
+@keyframes slideIn{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:translateX(0)}}
+@keyframes slideBack{from{opacity:0;transform:translateX(-30px)}to{opacity:1;transform:translateX(0)}}
+
+.panel-title{font-size:22px;font-weight:900;margin-bottom:5px;margin-top:14px;line-height:1.2}
+.panel-sub{font-size:13px;color:var(--text2);font-weight:600;line-height:1.4;margin-bottom:16px}
+
+/* verify link button — full gradient, same as action */
+.btn-verify-link{
+  width:100%;padding:15px;border-radius:var(--radius-sm);
+  border:none;
+  background:linear-gradient(135deg,var(--c-orange),var(--c-red));
+  color:#fff;font-family:'Nunito',sans-serif;font-size:17px;font-weight:900;
+  cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  box-shadow:0 4px 16px rgba(255,90,53,.3);
+  transition:opacity .2s,transform .1s;
+}
+.btn-verify-link:active{transform:scale(.97)}
+.btn-verify-link:disabled{
+  background:linear-gradient(135deg,#FFBDAA,#FFAB99);
+  box-shadow:none;cursor:not-allowed;
+  color:rgba(255,255,255,.8);
+}
+
+/* ── inputs ── */
+.field-label{
+  display:block;font-size:11px;font-weight:800;
+  text-transform:uppercase;letter-spacing:.07em;
+  color:var(--text3);margin-bottom:7px;
+}
+.inp{
+  width:100%;padding:14px 16px;
+  border:2px solid var(--border);border-radius:var(--radius-sm);
+  background:var(--surface2);
+  font-family:'Nunito',sans-serif;font-size:15px;font-weight:700;
+  color:var(--text);outline:none;
+  transition:border-color .2s,box-shadow .2s,background .2s;
+}
+.inp:focus{border-color:var(--c-orange);background:#fff;box-shadow:0 0 0 3px rgba(255,90,53,.12)}
+.inp::placeholder{color:var(--text3);font-weight:600}
+.inp-icon-wrap{position:relative}
+.inp-icon-wrap .inp{padding-left:44px}
+.inp-icon{
+  position:absolute;left:14px;top:50%;transform:translateY(-50%);
+  font-size:18px;pointer-events:none;
+}
+
+/* ── badge ── */
+.badge{
+  display:flex;align-items:flex-start;gap:10px;padding:12px 14px;
+  border-radius:var(--radius-sm);font-size:13px;font-weight:700;
+  margin-top:12px;animation:fadeIn .25s ease;
+}
+.badge.ok{background:#ECFDF5;color:#065F46;border:1.5px solid #A7F3D0}
+.badge.err{background:#FEF2F2;color:#991B1B;border:1.5px solid #FECACA}
+.badge.warn{background:#FFFBEB;color:#92400E;border:1.5px solid #FDE68A}
+
+/* ── storage bar ── */
+.storage-bar{
+  margin-top:14px;padding:14px;
+  background:var(--surface2);border-radius:var(--radius-sm);
+  display:none;animation:fadeIn .3s ease;
+}
+.storage-bar.show{display:block}
+.sb-head{display:flex;justify-content:space-between;margin-bottom:8px;font-size:12px;font-weight:800}
+.sb-label{color:var(--text2)}
+.sb-nums{color:var(--text)}
+.sb-bg{background:#E7E0DB;border-radius:99px;height:8px;overflow:hidden}
+.sb-fill{height:100%;border-radius:99px;transition:width .6s ease}
+.sb-fill.ok{background:linear-gradient(90deg,var(--c-green),#34D399)}
+.sb-fill.warn{background:linear-gradient(90deg,var(--c-yellow),#F97316)}
+.sb-fill.full{background:linear-gradient(90deg,var(--c-orange),var(--c-red))}
+.sb-sub{font-size:11px;color:var(--text3);font-weight:700;text-align:right;margin-top:5px}
+
+/* ── dropzone ── */
+.dropzone{
+  border:2.5px dashed var(--border);border-radius:var(--radius);
+  padding:32px 16px;text-align:center;cursor:pointer;
+  background:var(--surface2);position:relative;
+  transition:all .2s ease;
+}
+.dropzone:hover,.dropzone.over{
+  border-color:var(--c-orange);background:rgba(255,90,53,.04);
+}
+.dropzone input[type=file]{
+  position:absolute;inset:0;opacity:0;width:100%;height:100%;cursor:pointer;
+}
+.dz-emoji{font-size:40px;margin-bottom:10px;line-height:1;display:block}
+.dz-main{font-size:16px;font-weight:800;margin-bottom:4px;color:var(--text)}
+.dz-sub{font-size:12px;color:var(--text3);font-weight:600}
+.dz-sub strong{color:var(--c-orange)}
+
+/* ── yt button ── */
+.yt-btn{
+  width:100%;margin-top:14px;
+  padding:12px 16px;border-radius:var(--radius-sm);
+  border:1.5px solid #CBD5E1;background:#F8FAFC;
+  font-family:'Nunito',sans-serif;font-size:14px;font-weight:800;
+  color:#475569;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  transition:background .15s,border-color .15s;
+}
+.yt-btn:hover{background:#F1F5F9;border-color:#94A3B8}
+
+/* ── yt panel ── */
+.yt-panel{
+  display:none;margin-top:12px;padding:16px;
+  background:#F8FAFC;border-radius:var(--radius-sm);
+  border:1.5px solid #CBD5E1;
+}
+.yt-panel.open{display:block;animation:fadeIn .2s ease}
+
+.yt-row{display:flex;gap:8px;margin-bottom:10px}
+.yt-row .inp{flex:1;padding:12px 14px;font-size:14px}
+.btn-yt-search{
+  flex-shrink:0;padding:0 16px;border-radius:10px;border:none;
+  background:var(--c-orange);color:#fff;
+  font-family:'Nunito',sans-serif;font-size:13px;font-weight:800;
+  cursor:pointer;display:flex;align-items:center;gap:6px;
+  transition:opacity .15s;
+}
+.btn-yt-search:disabled{opacity:.45;cursor:not-allowed}
+
+.yt-loading{
+  text-align:center;padding:14px;font-size:13px;
+  color:var(--text2);font-weight:700;
+}
+.yt-preview{
+  display:flex;align-items:center;gap:12px;padding:12px;
+  background:#fff;border-radius:10px;border:1.5px solid #E2E8F0;
+  margin-bottom:10px;animation:fadeIn .2s ease;
+}
+.yt-thumb{width:64px;height:48px;border-radius:6px;object-fit:cover;flex-shrink:0;background:#eee}
+.yt-meta{min-width:0}
+.yt-vtitle{font-size:13px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text)}
+.yt-vdur{font-size:11px;color:var(--text3);font-weight:700;margin-top:2px}
+.yt-add-btn{
+  width:100%;padding:11px;border-radius:10px;border:none;
+  background:var(--c-orange);color:#fff;
+  font-family:'Nunito',sans-serif;font-size:14px;font-weight:800;
+  cursor:pointer;display:flex;align-items:center;justify-content:center;gap:7px;
+  transition:opacity .15s,transform .1s;
+}
+.yt-add-btn:active{transform:scale(.97)}
+.yt-help{margin-top:10px;display:none}
+.yt-help.show{display:block}
+.yt-help details summary{
+  font-size:12px;font-weight:800;color:var(--text3);
+  cursor:pointer;padding:6px 0;
+}
+.yt-help-body{
+  margin-top:8px;padding:12px;background:#fff;
+  border-radius:10px;border:1.5px solid var(--border);
+  font-size:12px;font-weight:700;color:#555;line-height:1.6;
+}
+
+/* ── queue header ── */
+.q-header{
+  display:none;justify-content:space-between;align-items:center;
+  margin:14px 0 8px;font-size:12px;font-weight:800;color:var(--text3);
+}
+.q-header.show{display:flex}
+.q-total{color:var(--c-orange)}
+
+/* ── queue items ── */
+.queue{display:flex;flex-direction:column;gap:8px}
+
+.qitem{
+  background:var(--surface2);border-radius:var(--radius-sm);
+  padding:12px 14px;
+  display:grid;grid-template-columns:auto 1fr auto;
+  align-items:center;gap:10px;
+  transition:opacity .2s,box-shadow .15s;
+}
+.qitem.dragging{opacity:.35}
+.qitem.drag-over{box-shadow:0 0 0 2px var(--c-orange);background:#FFF8F4}
+.drag-handle{
+  color:var(--border);font-size:20px;cursor:grab;
+  user-select:none;padding:2px 2px;flex-shrink:0;
+  transition:color .15s;
+}
+.drag-handle:hover{color:var(--text3)}
+.qitem.no-drag .drag-handle{visibility:hidden}
+
+.qitem-info{min-width:0}
+.qitem-name{font-size:14px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text)}
+.qitem-meta{font-size:11px;color:var(--text3);font-weight:600;margin-top:2px}
+.qitem-title-inp{
+  margin-top:8px;width:100%;padding:7px 10px;
+  border:1.5px solid var(--border);border-radius:8px;
+  font-family:'Nunito',sans-serif;font-size:13px;font-weight:700;
+  background:#fff;color:var(--text);outline:none;
+  transition:border-color .15s;
+}
+.qitem-title-inp:focus{border-color:var(--c-orange)}
+
+.qitem-actions{flex-shrink:0;display:flex;align-items:center;gap:6px}
+.qitem-del{
+  width:26px;height:26px;border-radius:50%;border:none;
+  background:var(--border);color:var(--text2);
+  font-size:13px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  transition:background .15s,color .15s;
+}
+.qitem-del:hover{background:#FEE2E2;color:var(--c-red)}
+
+/* status indicators */
+.st{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.st-ok{background:var(--c-green)}
+.st-err{background:var(--c-red)}
+.st-uploading{background:var(--c-orange);animation:pulse 1s ease infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+
+/* progress */
+.qitem-prog{grid-column:1/-1;margin-top:6px}
+.prog-bg{background:var(--border);border-radius:99px;height:5px;overflow:hidden}
+.prog-fill{height:100%;border-radius:99px;background:linear-gradient(90deg,var(--c-orange),var(--c-red));transition:width .4s ease;width:0%}
+.prog-lbl{font-size:11px;color:var(--text3);font-weight:700;margin-top:4px;line-height:1.4}
+
+/* ── author step ── */
+.author-card{
+  background:var(--surface);border-radius:var(--radius);padding:24px;
+  border:1.5px solid var(--border);box-shadow:var(--shadow);
+}
+.placeholder-pills{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.pill{
+  padding:8px 14px;border-radius:99px;border:1.5px solid var(--border);
+  font-size:13px;font-weight:700;color:var(--text2);
+  cursor:pointer;background:#fff;
+  transition:all .15s;
+}
+.pill:hover,.pill.active{background:var(--c-orange);border-color:var(--c-orange);color:#fff}
+
+/* ── summary step ── */
+.summary-card{
+  background:var(--surface);border-radius:var(--radius);
+  border:1.5px solid var(--border);box-shadow:var(--shadow);overflow:hidden;
+}
+.summary-row{
+  display:flex;align-items:center;gap:14px;padding:16px 20px;
+}
+.summary-row+.summary-row{border-top:1px solid var(--border)}
+.summary-icon{
+  width:40px;height:40px;border-radius:12px;
+  background:rgba(255,90,53,.1);
+  display:flex;align-items:center;justify-content:center;
+  font-size:20px;flex-shrink:0;
+}
+.summary-key{font-size:11px;font-weight:800;color:var(--text3);text-transform:uppercase;letter-spacing:.06em;margin-bottom:2px}
+.summary-val{font-size:15px;font-weight:800;color:var(--text)}
+.summary-files{padding:0 20px 16px}
+.summary-file{
+  display:flex;align-items:center;gap:10px;padding:10px 0;
+  border-bottom:1px solid var(--border);font-size:13px;
+}
+.summary-file:last-child{border-bottom:none}
+.summary-file-name{font-weight:800;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.summary-file-dur{font-size:11px;color:var(--text3);font-weight:700;flex-shrink:0}
+
+/* ── bottom nav ── */
+.bottom-nav{
+  background:#fff;
+  border-top:1px solid var(--border);
+  /* iOS Safari: env(safe-area-inset-bottom) handles the home indicator.
+     Add extra 60px so Safari's floating toolbar never covers the button. */
+  padding:10px 20px calc(10px + env(safe-area-inset-bottom, 20px));
+  flex-shrink:0;
+}
+.nav-row{display:flex;gap:10px;max-width:600px;margin:0 auto}
+
+.btn-back{
+  padding:15px 20px;border-radius:var(--radius-sm);
+  border:2px solid var(--border);background:#fff;
+  color:var(--text2);font-family:'Nunito',sans-serif;
+  font-size:20px;font-weight:800;cursor:pointer;
+  transition:background .15s;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;
+}
+.btn-back:hover{background:var(--surface2)}
+
+.btn-next{
+  flex:1;padding:15px;border-radius:var(--radius-sm);
+  border:none;
+  background:linear-gradient(135deg,var(--c-orange),var(--c-red));
+  color:#fff;font-family:'Nunito',sans-serif;font-size:17px;font-weight:900;
+  cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  box-shadow:0 4px 16px rgba(255,90,53,.3);
+  transition:opacity .2s,transform .1s,box-shadow .2s;
+}
+.btn-next:not(:disabled):hover{transform:translateY(-1px);box-shadow:0 6px 20px rgba(255,90,53,.4)}
+.btn-next:active{transform:scale(.97)}
+.btn-next:disabled{
+  background:linear-gradient(135deg,#FFBDAA,#FFAB99);
+  box-shadow:none;cursor:not-allowed;opacity:1;
+  color:rgba(255,255,255,.8);
+}
+
+.btn-send-final{
+  flex:1;padding:15px;border-radius:var(--radius-sm);
+  border:none;
+  background:linear-gradient(135deg,var(--c-green),#059669);
+  color:#fff;font-family:'Nunito',sans-serif;font-size:17px;font-weight:900;
+  cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  box-shadow:0 4px 16px rgba(16,185,129,.35);
+  transition:opacity .2s,transform .1s;
+}
+.btn-send-final:active{transform:scale(.97)}
+.btn-send-final:disabled{background:#D4C5BB;box-shadow:none;cursor:not-allowed}
+
+/* ── upload progress panel (shown during send) ── */
+.upload-panel{
+  background:var(--surface);border-radius:var(--radius);
+  border:1.5px solid var(--border);box-shadow:var(--shadow);
+  padding:20px;margin-top:0;
+}
+.up-title{font-size:16px;font-weight:900;margin-bottom:16px;
+  display:flex;align-items:center;gap:8px;
+}
+.up-spinner{
+  width:18px;height:18px;border:3px solid var(--border);
+  border-top-color:var(--c-orange);border-radius:50%;
+  animation:spin .7s linear infinite;flex-shrink:0;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── success screen ── */
+.success-screen{
+  display:none;
+  flex-direction:column;align-items:center;justify-content:center;
+  text-align:center;padding:20px 20px 20px;
+  flex:1;
+  animation:bounceIn .5s cubic-bezier(.68,-.55,.27,1.55) both;
+}
+.success-screen.show{display:flex}
+@keyframes bounceIn{from{opacity:0;transform:scale(.5)}to{opacity:1;transform:scale(1)}}
+.success-orb{
+  width:96px;height:96px;border-radius:50%;
+  background:linear-gradient(135deg,var(--c-green),#34D399);
+  display:flex;align-items:center;justify-content:center;
+  font-size:48px;margin-bottom:20px;
+  box-shadow:0 8px 32px rgba(16,185,129,.4);
+}
+.success-title{font-size:28px;font-weight:900;margin-bottom:10px}
+.success-body{
+  font-size:14px;color:var(--text2);font-weight:600;
+  line-height:1.6;max-width:300px;margin-bottom:28px;
+}
+.success-body strong{color:var(--text)}
+.btn-more{
+  padding:14px 28px;border-radius:var(--radius-sm);border:none;
+  background:linear-gradient(135deg,var(--c-orange),var(--c-red));
+  color:#fff;font-family:'Nunito',sans-serif;font-size:15px;font-weight:800;
+  cursor:pointer;box-shadow:0 4px 16px rgba(255,90,53,.3);
+  transition:transform .1s;
+}
+.btn-more:active{transform:scale(.97)}
+
+/* ── tip box ── */
+.tip{
+  background:rgba(59,130,246,.07);border-left:3px solid var(--c-blue);
+  border-radius:10px;padding:12px 14px;margin-top:12px;
+  font-size:12px;color:#1D4ED8;font-weight:700;line-height:1.5;
+}
+
+/* ── spinner inline ── */
+.spin-sm{
+  display:inline-block;width:14px;height:14px;
+  border:2.5px solid rgba(255,255,255,.3);
+  border-top-color:#fff;border-radius:50%;
+  animation:spin .6s linear infinite;
+  vertical-align:middle;
+}
+
+/* ── util ── */
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+
+/* ══════════════════════════════════════════════════════
+   DESKTOP LAYOUT (≥ 768px)
+   Two-column: left = form, right = live summary + send
+   No stepper, everything visible at once.
+══════════════════════════════════════════════════════ */
+@media(min-width:768px){
+
+  /* reset mobile constraints */
+  html,body{ overflow:auto; height:auto; }
+  .app{ height:auto; min-height:100vh; overflow:visible; flex-direction:column; }
+
+  /* slim top bar instead of big gradient header */
+  .header{
+    padding:14px 40px;
+    display:flex; align-items:center; justify-content:space-between;
+    text-align:left;
+  }
+  .header-inner{ display:flex; align-items:center; gap:24px; width:100%; }
+  .logo-row{ margin-bottom:0; }
+  .header-sub{ margin-left:auto; font-size:12px; opacity:.8; white-space:nowrap; }
+
+  /* hide stepper, step panels, mobile nav */
+  .step-rail{
+    background:transparent;
+    border-radius:0; margin:0; padding:0;
+    flex:none; overflow:visible;
+    min-height:0; display:block;
+  }
+  .step-dots, .step-labels, .bottom-nav{ display:none !important; }
+
+  /* desktop canvas */
+  .main{
+    padding:0; overflow:visible; flex:none;
+    background:transparent;
+  }
+
+  /* hide all step panels by default on desktop */
+  .step-panel{ display:none !important; }
+
+  /* show the desktop layout wrapper */
+  .desktop-layout{
+    display:grid !important;
+    grid-template-columns:1fr 380px;
+    gap:24px;
+    max-width:1100px;
+    margin:0 auto;
+    padding:32px 40px 40px;
+    align-items:start;
+  }
+
+  /* LEFT column — form sections stacked */
+  .dt-left{ display:flex; flex-direction:column; gap:20px; }
+
+  .dt-section{
+    background:#fff;
+    border-radius:20px;
+    padding:24px 28px;
+    border:1px solid var(--border);
+    box-shadow:0 2px 12px rgba(0,0,0,.05);
+  }
+  .dt-section-title{
+    font-size:13px; font-weight:900;
+    text-transform:uppercase; letter-spacing:.07em;
+    color:var(--c-orange); margin-bottom:14px;
+    display:flex; align-items:center; gap:8px;
+  }
+  .dt-section-title .dt-num{
+    width:22px; height:22px; border-radius:50%;
+    background:var(--c-orange); color:#fff;
+    font-size:11px; font-weight:900;
+    display:flex; align-items:center; justify-content:center;
+    flex-shrink:0;
+  }
+
+  /* RIGHT column — sticky live panel */
+  .dt-right{ position:sticky; top:32px; }
+
+  .dt-right-card{
+    background:#fff;
+    border-radius:20px;
+    padding:24px 28px;
+    border:1px solid var(--border);
+    box-shadow:0 2px 12px rgba(0,0,0,.05);
+  }
+  .dt-right-title{
+    font-size:16px; font-weight:900; margin-bottom:18px;
+    display:flex; align-items:center; gap:8px;
+  }
+
+  /* live status rows in right panel */
+  .dt-status-row{
+    display:flex; align-items:center; gap:12px;
+    padding:10px 0; border-bottom:1px solid var(--border);
+    font-size:13px;
+  }
+  .dt-status-row:last-of-type{ border-bottom:none; }
+  .dt-status-icon{ font-size:18px; flex-shrink:0; }
+  .dt-status-label{ font-size:11px; color:var(--text3); font-weight:800; text-transform:uppercase; letter-spacing:.05em; }
+  .dt-status-val{ font-weight:800; color:var(--text); margin-top:1px; font-size:14px; }
+  .dt-status-empty{ color:var(--text3); font-style:italic; font-weight:600; }
+
+  /* file list in right panel */
+  .dt-files-list{ margin-top:12px; display:flex; flex-direction:column; gap:6px; max-height:200px; overflow-y:auto; }
+  .dt-file-item{
+    display:flex; align-items:center; gap:8px;
+    font-size:13px; padding:6px 8px; border-radius:8px;
+    background:var(--surface2);
+  }
+  .dt-file-name{ flex:1; font-weight:700; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .dt-file-dur{ font-size:11px; color:var(--text3); font-weight:700; flex-shrink:0; }
+
+  /* send button in right panel */
+  .dt-send-btn{
+    width:100%; margin-top:20px;
+    padding:16px; border-radius:14px; border:none;
+    background:linear-gradient(135deg,var(--c-orange),var(--c-red));
+    color:#fff; font-family:'Nunito',sans-serif;
+    font-size:16px; font-weight:900;
+    cursor:pointer;
+    display:flex; align-items:center; justify-content:center; gap:8px;
+    box-shadow:0 4px 16px rgba(255,90,53,.3);
+    transition:transform .15s, box-shadow .15s, opacity .2s;
+  }
+  .dt-send-btn:not(:disabled):hover{ transform:translateY(-2px); box-shadow:0 6px 20px rgba(255,90,53,.4); }
+  .dt-send-btn:active{ transform:scale(.97); }
+  .dt-send-btn:disabled{
+    background:linear-gradient(135deg,#FFBDAA,#FFAB99);
+    box-shadow:none; cursor:not-allowed;
+    color:rgba(255,255,255,.8);
+  }
+
+  /* progress panel in right column */
+  .dt-progress-panel{ margin-top:16px; }
+  .dt-progress-title{
+    font-size:14px; font-weight:900; margin-bottom:12px;
+    display:flex; align-items:center; gap:8px;
+  }
+
+  /* desktop success overlay */
+  .dt-success{
+    display:none;
+    text-align:center; padding:20px 0;
+  }
+  .dt-success.show{ display:block; animation:fadeIn .4s ease; }
+  .dt-success .success-orb{ width:64px; height:64px; font-size:32px; margin:0 auto 12px; }
+  .dt-success .success-title{ font-size:18px; margin-bottom:8px; }
+  .dt-success .success-body{ font-size:13px; }
+
+  /* dropzone desktop variant */
+  .dropzone{ padding:24px 16px; }
+  .dz-main{ font-size:15px; }
+
+  /* youtube panel on desktop */
+  .yt-panel{ background:#F8FAFC; border-color:#CBD5E1; }
+
+  /* author card on desktop */
+  .author-card{ border:none; padding:0; box-shadow:none; background:transparent; }
+
+  /* pills row */
+  .placeholder-pills{ margin-top:10px; }
+}
+
+@media(max-width:360px){
+  .panel-title{font-size:19px}
+}
+</style>
+</head>
+<body>
+<div class="app">
+
+<!-- ── HEADER ── -->
+<header class="header">
+  <div class="header-inner">
+    <div class="logo-row">
+      <span class="logo-sparkle">🤖</span>
+      <span class="logo-name">Faba+Me Uploader</span>
+    </div>
+    <p class="header-sub">Carica i tuoi audio su Faba — senza registrare dal microfono</p>
+  </div>
+</header>
+
+<!-- ── STEP RAIL ── -->
+<div class="step-rail">
+  <div class="step-dots" id="step-dots"></div>
+  <div class="step-labels" id="step-labels"></div>
+
+  <!-- ── MAIN ── -->
+  <div class="main" id="main">
+
+    <!-- SUCCESS screen mobile (shown after all uploads done) -->
+    <div class="success-screen" id="success-screen">
+      <div class="success-orb">🎉</div>
+      <h2 class="success-title">Audio inviati!</h2>
+      <p class="success-body">
+        Apri l'app <strong>MyFaba → Faba•Me</strong> e accetta le tracce.<br><br>
+        <strong>Faba Raccontastorie</strong> — collega al PC e sincronizza tramite l'app desktop. 🖥️<br>
+        <strong>Faba+</strong> — sincronizzazione automatica Wi-Fi. 📶
+      </p>
+      <button class="btn-more" onclick="resetForMore()">➕ Carica altri audio</button>
+    </div>
+
+    <!-- ══ DESKTOP LAYOUT (hidden on mobile via CSS) ══ -->
+    <div class="desktop-layout" style="display:none" id="desktop-layout">
+
+      <!-- LEFT: form -->
+      <div class="dt-left">
+
+        <!-- Section 1: Link -->
+        <div class="dt-section">
+          <div class="dt-section-title"><div class="dt-num">1</div> Link d'invito da MyFaba</div>
+          <p style="font-size:13px;color:var(--text2);font-weight:600;margin-bottom:12px;line-height:1.4">
+            Apri MyFaba → Faba+Me → Aggiungi traccia → <strong>Invita a registrare</strong>, poi copia il link qui.
+          </p>
+          <label class="field-label">Link</label>
+          <input class="inp" type="url" id="inp-link"
+            placeholder="https://studio.myfaba.com/record/…"
+            autocomplete="off" autocorrect="off" spellcheck="false"
+            onkeydown="if(event.key==='Enter')verifyLink()" oninput="dtLinkChanged()"/>
+          <button class="btn-verify-link" id="btn-verify" style="margin-top:12px"
+            onclick="verifyLink()" disabled>
+            <span id="verify-lbl">🔗 Verifica link</span>
+          </button>
+          <div id="link-badge"></div>
+          <div class="storage-bar" id="storage-bar">
+            <div class="sb-head">
+              <span class="sb-label">💾 Spazio Faba•Me</span>
+              <span class="sb-nums" id="sb-nums"></span>
+            </div>
+            <div class="sb-bg"><div class="sb-fill ok" id="sb-fill" style="width:0%"></div></div>
+            <div class="sb-sub" id="sb-sub"></div>
+          </div>
+        </div>
+
+        <!-- Section 2: Audio files -->
+        <div class="dt-section">
+          <div class="dt-section-title"><div class="dt-num">2</div> File audio</div>
+          <div class="dropzone" id="dz"
+            ondragover="dzOver(event)" ondragleave="dzLeave()" ondrop="dzDrop(event)">
+            <input type="file" id="inp-files"
+              accept="audio/*,.mp3,.wav,.m4a,.ogg,.aac" multiple
+              onchange="filesChosen(this)"/>
+            <span class="dz-emoji">🎧</span>
+            <div class="dz-main">Trascina qui i file o clicca per scegliere</div>
+            <div class="dz-sub">MP3 · WAV · M4A · OGG · AAC — <strong>anche più file insieme</strong></div>
+          </div>
+
+          <button class="yt-btn" onclick="toggleYt()">▶️ Oppure aggiungi da YouTube</button>
+          <div class="yt-panel" id="yt-panel">
+            <div class="yt-row">
+              <input class="inp" type="url" id="yt-url"
+                placeholder="https://youtube.com/watch?v=…"
+                autocorrect="off" spellcheck="false"
+                onkeydown="if(event.key==='Enter')checkYt()"/>
+              <button class="btn-yt-search" id="btn-yt-search" onclick="checkYt()">🔍 Cerca</button>
+            </div>
+            <div id="yt-preview-wrap"></div>
+            <div class="yt-help" id="yt-help">
+              <details>
+                <summary>🔑 Continua a non funzionare? Carica i cookie di YouTube</summary>
+                <div class="yt-help-body">
+                  1. Installa <strong>"Get cookies.txt LOCALLY"</strong> su Chrome<br>
+                  2. Vai su <strong>youtube.com</strong> loggato → Export<br>
+                  3. Carica il file qui sotto
+                  <br><br>
+                  <input type="file" id="inp-cookies" accept=".txt" style="display:none" onchange="uploadCookies(this)"/>
+                  <button style="padding:8px 14px;border-radius:8px;border:none;background:#475569;color:#fff;font-family:Nunito,sans-serif;font-size:13px;font-weight:800;cursor:pointer"
+                    onclick="document.getElementById('inp-cookies').click()">📄 Carica cookies.txt</button>
+                  <div id="cookies-result" style="margin-top:8px"></div>
+                </div>
+              </details>
+            </div>
+          </div>
+
+          <div class="q-header" id="q-header">
+            <span>File in coda</span>
+            <span class="q-total" id="q-total"></span>
+          </div>
+          <div class="queue" id="queue"></div>
+        </div>
+
+        <!-- Section 3: Author -->
+        <div class="dt-section">
+          <div class="dt-section-title"><div class="dt-num">3</div> Chi manda questi audio?</div>
+          <div class="author-card">
+            <label class="field-label">Il tuo nome</label>
+            <div class="inp-icon-wrap">
+              <span class="inp-icon">👤</span>
+              <input class="inp" type="text" id="inp-author"
+                placeholder="Es. Mamma, Nonno Marco…"
+                maxlength="40" autocomplete="given-name"
+                oninput="checkCanProceed(); dtUpdateRight()"/>
+            </div>
+            <div class="placeholder-pills" id="name-pills">
+              <button class="pill" onclick="setPill('Mamma')">Mamma</button>
+              <button class="pill" onclick="setPill('Papà')">Papà</button>
+              <button class="pill" onclick="setPill('Nonna')">Nonna</button>
+              <button class="pill" onclick="setPill('Nonno')">Nonno</button>
+              <button class="pill" onclick="setPill('Zia')">Zia</button>
+              <button class="pill" onclick="setPill('Zio')">Zio</button>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /dt-left -->
+
+      <!-- RIGHT: live summary + send -->
+      <div class="dt-right">
+        <div class="dt-right-card">
+
+          <!-- Normal state: summary + send -->
+          <div id="dt-normal">
+            <div class="dt-right-title">📋 Riepilogo</div>
+
+            <div class="dt-status-row">
+              <span class="dt-status-icon">🔗</span>
+              <div>
+                <div class="dt-status-label">Link</div>
+                <div class="dt-status-val" id="dt-sum-link"><span class="dt-status-empty">non verificato</span></div>
+              </div>
+            </div>
+            <div class="dt-status-row">
+              <span class="dt-status-icon">👤</span>
+              <div>
+                <div class="dt-status-label">Da</div>
+                <div class="dt-status-val" id="dt-sum-author"><span class="dt-status-empty">—</span></div>
+              </div>
+            </div>
+            <div class="dt-status-row" style="border-bottom:none;padding-bottom:0">
+              <span class="dt-status-icon">🎵</span>
+              <div style="flex:1;min-width:0">
+                <div class="dt-status-label">File</div>
+                <div class="dt-status-val" id="dt-sum-count"><span class="dt-status-empty">nessun file</span></div>
+                <div class="dt-files-list" id="dt-files-list"></div>
+              </div>
+            </div>
+
+            <button class="dt-send-btn" id="dt-send-btn" disabled onclick="startUpload()">
+              🚀 Invia a Faba+Me
+            </button>
+          </div>
+
+          <!-- Upload progress state -->
+          <div id="dt-progress" style="display:none">
+            <div class="dt-progress-title">
+              <div class="up-spinner"></div>
+              <span id="dt-progress-title-text">Invio in corso…</span>
+            </div>
+            <div class="queue" id="upload-queue"></div>
+          </div>
+
+          <!-- Success state -->
+          <div class="dt-success" id="dt-success">
+            <div class="success-orb">🎉</div>
+            <div class="success-title">Audio inviati!</div>
+            <div class="success-body" style="margin-bottom:16px">
+              Apri <strong>MyFaba → Faba•Me</strong> e accetta le tracce.<br><br>
+              <strong>Faba Raccontastorie</strong> — sincronizza via PC 🖥️<br>
+              <strong>Faba+</strong> — sincronizzazione Wi-Fi automatica 📶
+            </div>
+            <button class="btn-more" onclick="resetForMore()">➕ Carica altri audio</button>
+          </div>
+
+        </div>
+      </div><!-- /dt-right -->
+
+    </div><!-- /desktop-layout -->
+
+  <!-- STEP 1 — link -->
+  <div class="step-panel" id="panel-1">
+    <h2 class="panel-title">Incolla il link dall'app MyFaba</h2>
+    <p class="panel-sub">Apri MyFaba → Faba+Me → Aggiungi traccia → Invita a registrare, poi copia il link qui.</p>
+
+    <label class="field-label">Link d'invito</label>
+    <input class="inp" type="url" id="inp-link"
+      placeholder="https://studio.myfaba.com/record/…"
+      autocomplete="off" autocorrect="off" spellcheck="false"
+      onkeydown="if(event.key==='Enter')verifyLink()"/>
+
+    <button class="btn-verify-link" id="btn-verify" style="margin-top:14px"
+      onclick="verifyLink()" disabled>
+      <span id="verify-lbl">🔗 Verifica link</span>
+    </button>
+
+    <div id="link-badge"></div>
+
+    <div class="storage-bar" id="storage-bar">
+      <div class="sb-head">
+        <span class="sb-label">💾 Spazio Faba•Me</span>
+        <span class="sb-nums" id="sb-nums"></span>
+      </div>
+      <div class="sb-bg"><div class="sb-fill ok" id="sb-fill" style="width:0%"></div></div>
+      <div class="sb-sub" id="sb-sub"></div>
+    </div>
+  </div>
+
+  <!-- STEP 2 — audio -->
+  <div class="step-panel" id="panel-2">
+    <h2 class="panel-title">Scegli i file audio</h2>
+    <p class="panel-sub">Aggiungi le canzoni dal tuo dispositivo. Puoi selezionarne più di una!</p>
+
+    <div class="dropzone" id="dz"
+      ondragover="dzOver(event)" ondragleave="dzLeave()" ondrop="dzDrop(event)">
+      <input type="file" id="inp-files"
+        accept="audio/*,.mp3,.wav,.m4a,.ogg,.aac" multiple
+        onchange="filesChosen(this)"/>
+      <span class="dz-emoji">🎧</span>
+      <div class="dz-main">Tocca per scegliere i file</div>
+      <div class="dz-sub">MP3 · WAV · M4A · OGG · AAC — <strong>anche più file insieme</strong></div>
+    </div>
+
+    <button class="yt-btn" onclick="toggleYt()">
+      ▶️ Oppure aggiungi da YouTube
+    </button>
+    <div class="yt-panel" id="yt-panel">
+      <div class="yt-row">
+        <input class="inp" type="url" id="yt-url"
+          placeholder="https://youtube.com/watch?v=…"
+          autocorrect="off" spellcheck="false"
+          onkeydown="if(event.key==='Enter')checkYt()"/>
+        <button class="btn-yt-search" id="btn-yt-search" onclick="checkYt()">
+          🔍 Cerca
+        </button>
+      </div>
+      <div id="yt-preview-wrap"></div>
+      <div class="yt-help" id="yt-help">
+        <details>
+          <summary>🔑 Continua a non funzionare? Carica i cookie di YouTube</summary>
+          <div class="yt-help-body">
+            1. Installa l'estensione Chrome <strong>"Get cookies.txt LOCALLY"</strong><br>
+            2. Vai su <strong>youtube.com</strong> da browser loggato<br>
+            3. Clicca l'estensione → Export → salva il file<br>
+            4. Caricalo qui sotto
+            <br><br>
+            <input type="file" id="inp-cookies" accept=".txt" style="display:none" onchange="uploadCookies(this)"/>
+            <button style="padding:9px 16px;border-radius:8px;border:none;background:#475569;color:#fff;font-family:Nunito,sans-serif;font-size:13px;font-weight:800;cursor:pointer"
+              onclick="document.getElementById('inp-cookies').click()">
+              📄 Carica cookies.txt
+            </button>
+            <div id="cookies-result" style="margin-top:8px"></div>
+          </div>
+        </details>
+      </div>
+    </div>
+
+    <div class="q-header" id="q-header">
+      <span>File in coda</span>
+      <span class="q-total" id="q-total"></span>
+    </div>
+    <div class="queue" id="queue"></div>
+  </div>
+
+  <!-- STEP 3 — author -->
+  <div class="step-panel" id="panel-3">
+    <h2 class="panel-title">Chi manda questi audio?</h2>
+    <p class="panel-sub">Il tuo nome apparirà nell'app MyFaba accanto alle tracce.</p>
+
+    <div class="author-card">
+      <label class="field-label">Il tuo nome</label>
+      <div class="inp-icon-wrap">
+        <span class="inp-icon">👤</span>
+        <input class="inp" type="text" id="inp-author"
+          placeholder="Es. Mamma, Nonno Marco…"
+          maxlength="40" autocomplete="given-name"
+          oninput="checkCanProceed()"/>
+      </div>
+      <div class="placeholder-pills" id="name-pills">
+        <button class="pill" onclick="setPill('Mamma')">Mamma</button>
+        <button class="pill" onclick="setPill('Papà')">Papà</button>
+        <button class="pill" onclick="setPill('Nonna')">Nonna</button>
+        <button class="pill" onclick="setPill('Nonno')">Nonno</button>
+        <button class="pill" onclick="setPill('Zia')">Zia</button>
+        <button class="pill" onclick="setPill('Zio')">Zio</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- STEP 4 — summary + send -->
+  <div class="step-panel" id="panel-4">
+    <h2 class="panel-title">Tutto pronto!</h2>
+    <p class="panel-sub">Controlla il riepilogo e invia a Faba•Me.</p>
+
+    <div class="summary-card" id="summary-card">
+      <div class="summary-row">
+        <div class="summary-icon">🔗</div>
+        <div>
+          <div class="summary-key">Link</div>
+          <div class="summary-val" id="sum-link">—</div>
+        </div>
+      </div>
+      <div class="summary-row">
+        <div class="summary-icon">👤</div>
+        <div>
+          <div class="summary-key">Da</div>
+          <div class="summary-val" id="sum-author">—</div>
+        </div>
+      </div>
+      <div class="summary-row">
+        <div class="summary-icon">🎵</div>
+        <div>
+          <div class="summary-key">File</div>
+          <div class="summary-val" id="sum-count">—</div>
+        </div>
+      </div>
+      <div class="summary-files" id="sum-files"></div>
+    </div>
+
+    <!-- upload progress (shown while uploading) -->
+    <div class="upload-panel" id="upload-panel" style="display:none;margin-top:16px">
+      <div class="up-title">
+        <div class="up-spinner"></div>
+        <span id="up-title-text">Invio in corso…</span>
+      </div>
+      <div class="queue" id="upload-queue"></div>
+    </div>
+  </div>
+
+  </div><!-- /main -->
+
+  <!-- ── BOTTOM NAV ── -->
+  <div class="bottom-nav">
+    <div class="nav-row">
+      <button class="btn-back" id="btn-back" onclick="goBack()" style="display:none">←</button>
+      <button class="btn-next" id="btn-next" onclick="goNext()" disabled>
+        <span id="btn-next-lbl">Avanti</span>
+      </button>
+    </div>
+  </div>
+
+</div><!-- /step-rail -->
+</div><!-- /app -->
+
+<script>
+/* ══════════════════════════════════════════════════════
+   STATE
+══════════════════════════════════════════════════════ */
+let currentStep = 1;
+const TOTAL_STEPS = 4;
+const STEP_LABELS = ['Link', 'Audio', 'Nome', 'Invia'];
+
+let shareId = null;
+let linkExpiry = null;
+let fileList = [];
+let uploading = false;
+let nextId = 0;
+let storageUsed = null;
+let storageMax = null;
+let uploadedSeconds = 0;
+let ytInfo = null;
+let dragId = null;
+
+/* ══════════════════════════════════════════════════════
+   STEP INDICATOR
+══════════════════════════════════════════════════════ */
+function renderStepIndicator() {
+  const dots = document.getElementById('step-dots');
+  const labels = document.getElementById('step-labels');
+
+  // Dots: dot | line | dot | line | dot | line | dot
+  let dotsHtml = '';
+  for (let i = 1; i <= TOTAL_STEPS; i++) {
+    const state = i < currentStep ? 'done' : i === currentStep ? 'active' : 'future';
+    const icon = i < currentStep ? '✓' : i;
+    if (i > 1) {
+      const lineState = i <= currentStep ? 'done' : 'future';
+      dotsHtml += `<div class="step-line ${lineState}"></div>`;
+    }
+    dotsHtml += `<div class="step-dot ${state}">${icon}</div>`;
+  }
+  dots.innerHTML = dotsHtml;
+
+  // Labels: mirror exact same structure — label | gap | label | gap | label | gap | label
+  // Each label is 32px (same as dot), gaps are flex:1 (same as lines) — perfect alignment
+  let labelsHtml = '';
+  for (let i = 0; i < TOTAL_STEPS; i++) {
+    const state = (i+1) < currentStep ? 'done' : (i+1) === currentStep ? 'active' : 'future';
+    if (i > 0) labelsHtml += `<div class="step-label-gap"></div>`;
+    labelsHtml += `<span class="step-label ${state}">${STEP_LABELS[i]}</span>`;
+  }
+  labels.innerHTML = labelsHtml;
+}
+
+/* ══════════════════════════════════════════════════════
+   NAVIGATION
+══════════════════════════════════════════════════════ */
+function showStep(n, direction = 'forward') {
+  const old = document.getElementById(`panel-${currentStep}`);
+  const next = document.getElementById(`panel-${n}`);
+  if (old) old.classList.remove('active');
+  currentStep = n;
+  if (next) {
+    next.classList.add('active');
+    next.classList.toggle('slide-back', direction === 'back');
+    // re-trigger animation
+    void next.offsetWidth;
+    next.classList.remove('slide-back');
+    next.style.animation = 'none';
+    void next.offsetWidth;
+    next.style.animation = direction === 'back' ? 'slideBack .28s cubic-bezier(.25,.46,.45,.94) both' : '';
+  }
+  renderStepIndicator();
+  renderNav();
+  if (n === 4) renderSummary();
+  window.scrollTo({top: 0, behavior: 'smooth'});
+}
+
+function goNext() {
+  if (currentStep < TOTAL_STEPS) showStep(currentStep + 1, 'forward');
+}
+
+function goBack() {
+  if (currentStep > 1) showStep(currentStep - 1, 'back');
+}
+
+function renderNav() {
+  const btnBack = document.getElementById('btn-back');
+  const btnNext = document.getElementById('btn-next');
+  const btnNextLbl = document.getElementById('btn-next-lbl');
+
+  btnBack.style.display = currentStep > 1 ? '' : 'none';
+
+  const isSend = currentStep === 4;
+  if (isSend) {
+    btnNext.className = 'btn-send-final';
+    btnNext.onclick = startUpload;
+    btnNextLbl.innerHTML = '🚀 Invia a Faba•Me';
+  } else {
+    btnNext.className = 'btn-next';
+    btnNext.onclick = goNext;
+    btnNextLbl.innerHTML = 'Avanti →';
+  }
+
+  checkCanProceed();
+}
+
+function checkCanProceed() {
+  const btn = document.getElementById('btn-next');
+  let canGo = false;
+  switch (currentStep) {
+    case 1: canGo = !!shareId; break;
+    case 2: canGo = fileList.length > 0; break;
+    case 3: canGo = !!(document.getElementById('inp-author')?.value.trim()); break;
+    case 4: canGo = !uploading; break;
+  }
+  if (btn) btn.disabled = !canGo;
+}
+
+/* ══════════════════════════════════════════════════════
+   UTILS
+══════════════════════════════════════════════════════ */
+function esc(s = '') {
+  const d = document.createElement('div');
+  d.textContent = String(s);
+  return d.innerHTML;
+}
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function fmtMin(sec) {
+  if (!sec && sec !== 0) return '?';
+  const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+  return s > 0 ? `${m} min ${s} sec` : `${m} min`;
+}
+function fmtTime(sec) {
+  if (!sec) return '';
+  const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+  return `${m}:${String(s).padStart(2,'0')}`;
+}
+function getAudioDuration(file) {
+  return new Promise(resolve => {
+    const url = URL.createObjectURL(file);
+    const a = new Audio();
+    a.addEventListener('loadedmetadata', () => { URL.revokeObjectURL(url); resolve(isFinite(a.duration) ? Math.round(a.duration) : null); });
+    a.addEventListener('error', () => { URL.revokeObjectURL(url); resolve(null); });
+    a.src = url;
+  });
+}
+
+/* ══════════════════════════════════════════════════════
+   STORAGE BAR
+══════════════════════════════════════════════════════ */
+function updateStorageBar() {
+  const bar = document.getElementById('storage-bar');
+  if (storageMax === null && storageUsed === null) { bar.classList.remove('show'); return; }
+  bar.classList.add('show');
+  const used = (storageUsed || 0) + uploadedSeconds;
+  const max = storageMax || 0;
+  const pct = max > 0 ? Math.min(100, Math.round(used / max * 100)) : 0;
+  const free = Math.max(0, max - used);
+  const fill = document.getElementById('sb-fill');
+  fill.style.width = pct + '%';
+  fill.className = 'sb-fill ' + (pct >= 95 ? 'full' : pct >= 75 ? 'warn' : 'ok');
+  document.getElementById('sb-nums').textContent = max > 0 ? `${fmtMin(used)} / ${fmtMin(max)}` : `Usati: ${fmtMin(used)}`;
+  document.getElementById('sb-sub').textContent = max > 0 ? `Disponibili: ~${fmtMin(free)}` : '';
+}
+
+/* ══════════════════════════════════════════════════════
+   STEP 1 — LINK
+══════════════════════════════════════════════════════ */
+const inpLink = document.getElementById('inp-link');
+
+// Estrae l'URL MyFaba da qualsiasi testo incollato (es. messaggio di condivisione Faba)
+inpLink.addEventListener('paste', e => {
+  const pasted = (e.clipboardData || window.clipboardData).getData('text');
+  const m = pasted.match(/https?:\/\/studio\.myfaba\.com\/record\/[A-Za-z0-9_-]+/);
+  if (m && pasted.trim() !== m[0]) {
+    e.preventDefault();
+    inpLink.value = m[0];
+    inpLink.dispatchEvent(new Event('input'));
+  }
+});
+
+inpLink.addEventListener('input', () => {
+  document.getElementById('btn-verify').disabled = !inpLink.value.trim();
+  shareId = null;
+  checkCanProceed();
+});
+inpLink.addEventListener('keydown', e => e.key === 'Enter' && verifyLink());
+
+async function verifyLink() {
+  const url = inpLink.value.trim();
+  if (!url) return;
+  const btn = document.getElementById('btn-verify');
+  const lbl = document.getElementById('verify-lbl');
+  btn.disabled = true;
+  lbl.innerHTML = '<span class="spin-sm"></span> Verifica…';
+  document.getElementById('link-badge').innerHTML = '';
+
+  try {
+    const r = await fetch('/api/validate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      shareId = d.shareId;
+      storageUsed = d.usedSeconds;
+      storageMax = d.maxSeconds;
+      uploadedSeconds = 0;
+      const exp = d.expiresLabel ? ` — scade ${d.expiresLabel}` : '';
+      document.getElementById('link-badge').innerHTML =
+        `<div class="badge ok">✅ Link valido${exp}</div>`;
+      updateStorageBar();
+      checkCanProceed();
+      dtUpdateRight();
+    } else {
+      document.getElementById('link-badge').innerHTML =
+        `<div class="badge err">❌ ${esc(d.error)}</div>`;
+    }
+  } catch (e) {
+    document.getElementById('link-badge').innerHTML =
+      `<div class="badge err">❌ Errore di rete</div>`;
+  }
+
+  lbl.textContent = '🔗 Verifica link';
+  btn.disabled = !inpLink.value.trim();
+}
+
+/* ══════════════════════════════════════════════════════
+   STEP 2 — FILES
+══════════════════════════════════════════════════════ */
+const dz = document.getElementById('dz');
+function dzOver(e) { e.preventDefault(); dz.classList.add('over'); }
+function dzLeave() { dz.classList.remove('over'); }
+function dzDrop(e) { e.preventDefault(); dz.classList.remove('over'); addFiles(e.dataTransfer.files); }
+function filesChosen(inp) { addFiles(inp.files); inp.value = ''; }
+
+async function addFilesAsync(files) {
+  for (const f of files) {
+    if (!f.type.startsWith('audio/') && !/\.(mp3|wav|ogg|aac|m4a|flac|opus)$/i.test(f.name)) continue;
+    const item = { file: f, title: f.name.replace(/\.[^.]+$/, ''), id: nextId++, status: 'wait', msg: '', duration: null };
+    fileList.push(item);
+    renderQueue();
+    updateQueueCounter();
+    getAudioDuration(f).then(dur => { item.duration = dur; renderQueue(); updateQueueCounter(); dtUpdateRight(); });
+  }
+  checkCanProceed();
+  dtUpdateRight();
+}
+function addFiles(files) { addFilesAsync(files); }
+
+function renderQueue() {
+  const el = document.getElementById('queue');
+  if (!fileList.length) { el.innerHTML = ''; return; }
+  el.innerHTML = fileList.map(item => {
+    const meta = item.isYoutube ? '▶️ YouTube' : `${(item.file.size/1024/1024).toFixed(1)} MB`;
+    const dur = item.duration ? ` · ${fmtTime(item.duration)}` : '';
+    const canDrag = item.status === 'wait' && !uploading;
+    const canEdit = item.status === 'wait' && !uploading;
+    const showDel = item.status === 'wait' && !uploading;
+
+    let stHtml = '';
+    if (item.status === 'uploading') stHtml = `<span class="st st-uploading"></span>`;
+    else if (item.status === 'ok') stHtml = `<span class="st st-ok"></span>`;
+    else if (item.status === 'err') stHtml = `<span class="st st-err"></span>`;
+
+    let prog = '';
+    if (item.status === 'uploading') prog = `<div class="qitem-prog">
+      <div class="prog-bg"><div class="prog-fill" id="pf-${item.id}" style="width:${item.pct||0}%"></div></div>
+      <div class="prog-lbl" id="pl-${item.id}">${esc(item.msg||'In coda…')}</div></div>`;
+    else if (item.status === 'ok') prog = `<div class="qitem-prog"><div class="prog-lbl" style="color:var(--c-green)">✅ Caricato!${item.duration?' ('+fmtMin(item.duration)+')':''}</div></div>`;
+    else if (item.status === 'err') prog = `<div class="qitem-prog"><div class="prog-lbl" style="color:var(--c-red);white-space:normal;line-height:1.4">❌ ${esc(item.msg)}</div></div>`;
+
+    return `<div class="qitem${canDrag?'':' no-drag'}" id="qi-${item.id}"
+        draggable="${canDrag}"
+        ondragstart="dragStart(event,${item.id})"
+        ondragover="dragOver(event,${item.id})"
+        ondragleave="dragLeave(event)"
+        ondrop="dragDrop(event,${item.id})"
+        ondragend="dragEnd(event)">
+      <span class="drag-handle">⠿</span>
+      <div class="qitem-info">
+        <div class="qitem-name">${esc(item.file.name)}</div>
+        <div class="qitem-meta">${meta}${dur}</div>
+        ${canEdit ? `<input class="qitem-title-inp" type="text" value="${esc(item.title)}" placeholder="Titolo" oninput="setTitle(${item.id},this.value)"/>` : `<div style="font-size:12px;color:var(--text3);margin-top:4px;font-weight:700">${esc(item.title)}</div>`}
+      </div>
+      <div class="qitem-actions">
+        ${stHtml}
+        ${showDel ? `<button class="qitem-del" onclick="removeFile(${item.id})">✕</button>` : ''}
+      </div>
+      ${prog}
+    </div>`;
+  }).join('');
+}
+
+function removeFile(id) {
+  fileList = fileList.filter(f => f.id !== id);
+  renderQueue(); updateQueueCounter(); checkCanProceed(); dtUpdateRight();
+}
+function setTitle(id, val) {
+  const item = fileList.find(f => f.id === id);
+  if (item) item.title = val;
+}
+function updateQueueCounter() {
+  const hdr = document.getElementById('q-header');
+  const tot = document.getElementById('q-total');
+  const waiting = fileList.filter(f => f.status === 'wait' || f.status === 'uploading');
+  if (!waiting.length) { hdr.classList.remove('show'); return; }
+  hdr.classList.add('show');
+  const knownSec = waiting.filter(f => f.duration).reduce((a, f) => a + f.duration, 0);
+  const hasUnk = waiting.some(f => !f.duration);
+  tot.textContent = `${waiting.length} file${knownSec ? ' · ' + fmtMin(knownSec) + (hasUnk ? '+' : '') : ''}`;
+}
+
+/* ── drag reorder ── */
+function dragStart(e, id) {
+  dragId = id;
+  e.dataTransfer.effectAllowed = 'move';
+  setTimeout(() => { const el = document.getElementById(`qi-${id}`); if(el) el.classList.add('dragging'); }, 0);
+}
+function dragOver(e, id) {
+  e.preventDefault();
+  if (id === dragId) return;
+  document.querySelectorAll('.qitem').forEach(el => el.classList.remove('drag-over'));
+  document.getElementById(`qi-${id}`)?.classList.add('drag-over');
+}
+function dragLeave(e) { e.currentTarget.classList.remove('drag-over'); }
+function dragDrop(e, targetId) {
+  e.preventDefault();
+  document.querySelectorAll('.qitem').forEach(el => el.classList.remove('drag-over','dragging'));
+  if (dragId === null || dragId === targetId) return;
+  const from = fileList.findIndex(f => f.id === dragId);
+  const to = fileList.findIndex(f => f.id === targetId);
+  if (from < 0 || to < 0) return;
+  const [item] = fileList.splice(from, 1);
+  fileList.splice(to, 0, item);
+  dragId = null;
+  renderQueue(); updateQueueCounter();
+}
+function dragEnd() {
+  document.querySelectorAll('.qitem').forEach(el => el.classList.remove('dragging','drag-over'));
+  dragId = null;
+}
+
+/* ── YouTube ── */
+function toggleYt() { document.getElementById('yt-panel').classList.toggle('open'); }
+
+/* ── YouTube — 100% client-side via InnerTube API ───────────────────────────
+   Il browser chiama YouTube direttamente (IP residenziale = nessun blocco).
+   Il server non tocca mai YouTube.
+   Flusso: browser → InnerTube API → URL audio → download MP3 → /api/upload
+──────────────────────────────────────────────────────────────────────────── */
+
+function extractVideoId(ytUrl) {
+  const m = ytUrl.match(/(?:v=|youtu\.be\/|\/v\/|\/embed\/)([A-Za-z0-9_-]{11})/);
+  return m ? m[1] : null;
+}
+
+async function innertubePlayer(videoId) {
+  // Chiama InnerTube /player dal browser — l'IP del client non è flaggato
+  const body = {
+    videoId,
+    context: {
+      client: {
+        clientName: 'WEB',
+        clientVersion: '2.20250312.04.00',
+        hl: 'en', gl: 'US'
+      }
+    },
+    racyCheckOk: true,
+    contentCheckOk: true
+  };
+  const resp = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  if (!resp.ok) throw new Error(`InnerTube HTTP ${resp.status}`);
+  return await resp.json();
+}
+
+function pickBestAudio(data) {
+  const fmts = [
+    ...(data.streamingData?.adaptiveFormats || []),
+    ...(data.streamingData?.formats || [])
+  ].filter(f => f.mimeType?.startsWith('audio/') && f.url);
+  // Prefer opus/webm at ~128kbps, fallback to anything with a direct URL
+  fmts.sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+  return fmts[0] || null;
+}
+
+async function downloadAudioBlob(audioUrl, onProgress) {
+  // L'URL googlevideo.com viene bloccato da CORS se chiamato direttamente.
+  // Lo facciamo passare dal nostro server proxy.
+  const proxyUrl = '/api/yt-audio?url=' + encodeURIComponent(audioUrl);
+  const resp = await fetch(proxyUrl);
+  if (!resp.ok) throw new Error(`Download HTTP ${resp.status}`);
+  const total = parseInt(resp.headers.get('Content-Length') || '0');
+  const reader = resp.body.getReader();
+  const chunks = [];
+  let received = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.length;
+    if (total && onProgress) onProgress(received / total);
+  }
+  return new Blob(chunks, { type: 'audio/webm' });
+}
+
+async function checkYt() {
+  const url = document.getElementById('yt-url').value.trim();
+  if (!url) return;
+  const btn = document.getElementById('btn-yt-search');
+  const wrap = document.getElementById('yt-preview-wrap');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spin-sm"></span>';
+  wrap.innerHTML = `<div class="yt-loading">🔍 Recupero informazioni video…</div>`;
+  ytInfo = null;
+
+  const videoId = extractVideoId(url);
+  if (!videoId) {
+    wrap.innerHTML = `<div class="badge err" style="margin:0">❌ URL YouTube non valido.</div>`;
+    btn.disabled = false; btn.textContent = '🔍 Cerca';
+    return;
+  }
+
+  try {
+    const r = await fetch('/api/yt-info', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ videoId })
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      const notubeBtn = d.notubeUrl
+        ? `<br><a href="${d.notubeUrl}" target="_blank" style="display:inline-block;margin-top:8px;padding:8px 14px;background:#FF5A35;color:#fff;border-radius:8px;font-size:12px;font-weight:800;text-decoration:none;">↗ Scarica da notube.link</a>`
+        : '';
+      wrap.innerHTML = `<div class="badge err" style="margin:0">❌ ${esc(d.error)}${notubeBtn}</div>`;
+      btn.disabled = false; btn.textContent = '🔍 Cerca';
+      return;
+    }
+    ytInfo = { ...d, url, videoId };
+    const dur = d.duration ? fmtTime(d.duration) : '';
+    wrap.innerHTML = `
+      <div class="yt-preview">
+        ${d.thumbnail ? `<img class="yt-thumb" src="${esc(d.thumbnail)}" onerror="this.style.display='none'"/>` : '<div class="yt-thumb" style="background:#e2e8f0;display:flex;align-items:center;justify-content:center;font-size:22px">🎵</div>'}
+        <div class="yt-meta">
+          <div class="yt-vtitle">${esc(d.title)}</div>
+          ${dur ? `<div class="yt-vdur">⏱ ${dur}</div>` : ''}
+        </div>
+      </div>
+      <label class="field-label" style="margin-top:10px">Titolo su Faba</label>
+      <input class="inp" type="text" id="yt-custom-title" value="${esc(d.title)}" maxlength="60" style="margin-bottom:10px;padding:11px 14px;font-size:14px"/>
+      <button class="yt-add-btn" onclick="addFromYoutube()">➕ Aggiungi alla coda</button>`;
+  } catch(e) {
+    wrap.innerHTML = `<div class="badge err" style="margin:0">❌ Errore di rete</div>`;
+  }
+  btn.disabled = false;
+  btn.textContent = '🔍 Cerca';
+}
+
+async function addFromYoutube() {
+  if (!ytInfo) return;
+  const title = document.getElementById('yt-custom-title')?.value.trim() || ytInfo.title;
+  fileList.push({
+    isYoutube: true,
+    youtubeUrl: ytInfo.url,
+    file: { name: title + ' (YouTube)', size: 0 },
+    title, id: nextId++, status: 'wait', msg: '',
+    duration: ytInfo.duration || null
+  });
+  renderQueue(); updateQueueCounter(); checkCanProceed(); dtUpdateRight();
+  document.getElementById('yt-url').value = '';
+  document.getElementById('yt-preview-wrap').innerHTML = '';
+  ytInfo = null;
+}
+
+async function uploadCookies(inp) { inp.value = ''; }
+
+/* ══════════════════════════════════════════════════════
+   STEP 3 — AUTHOR
+══════════════════════════════════════════════════════ */
+function setPill(name) {
+  const inp = document.getElementById('inp-author');
+  inp.value = name;
+  document.querySelectorAll('.pill').forEach(p => p.classList.toggle('active', p.textContent === name));
+  checkCanProceed();
+  dtUpdateRight();
+}
+
+/* ══════════════════════════════════════════════════════
+   STEP 4 — SUMMARY + SEND
+══════════════════════════════════════════════════════ */
+function renderSummary() {
+  const shareLabel = shareId ? `…${shareId}` : '—';
+  document.getElementById('sum-link').textContent = shareLabel;
+  document.getElementById('sum-author').textContent = document.getElementById('inp-author')?.value.trim() || '—';
+  const total = fileList.length;
+  const totalSec = fileList.filter(f=>f.duration).reduce((a,f)=>a+f.duration,0);
+  document.getElementById('sum-count').textContent =
+    `${total} ${total === 1 ? 'file' : 'file'}${totalSec ? ' · ' + fmtMin(totalSec) : ''}`;
+  document.getElementById('sum-files').innerHTML = fileList.map(f =>
+    `<div class="summary-file">
+      <span style="font-size:16px">${f.isYoutube ? '▶️' : '🎵'}</span>
+      <span class="summary-file-name">${esc(f.title || f.file.name)}</span>
+      ${f.duration ? `<span class="summary-file-dur">${fmtTime(f.duration)}</span>` : ''}
+    </div>`
+  ).join('');
+}
+
+/* ══════════════════════════════════════════════════════
+   UPLOAD
+══════════════════════════════════════════════════════ */
+async function startUpload() {
+  if (uploading || fileList.filter(f => f.status === 'wait').length === 0) return;
+  uploading = true;
+  checkCanProceed();
+
+  // Show upload panel — mobile and desktop
+  document.getElementById('summary-card') && (document.getElementById('summary-card').style.display = 'none');
+  const upPanel = document.getElementById('upload-panel');
+  if (upPanel) upPanel.style.display = 'block';
+  if (isDesktop()) dtShowProgress();
+
+  const author = document.getElementById('inp-author').value.trim();
+  const pending = fileList.filter(f => f.status === 'wait');
+  let allOk = true;
+
+  for (const item of pending) {
+    item.status = 'uploading';
+    item.msg = 'Conversione audio…';
+    item.pct = 10;
+    renderUploadQueue();
+
+    const isYt = !!item.isYoutube;
+    const interval = setInterval(() => {
+      if (item.pct < 65) {
+        item.pct += 4 + Math.random() * 6;
+        if (isYt) {
+          if (item.pct < 30) item.msg = 'Download audio…';
+          else if (item.pct < 60) item.msg = 'Elaborazione…';
+        } else {
+          item.msg = item.pct < 35 ? 'Conversione audio…' : item.pct < 65 ? 'Invio a Faba cloud…' : 'Finalizzazione…';
+        }
+        document.getElementById(`pf-${item.id}`)?.style.setProperty('width', item.pct + '%');
+        const lbl = document.getElementById(`pl-${item.id}`);
+        if (lbl) lbl.textContent = item.msg;
+      }
+    }, 700);
+
+    try {
+      let r;
+      if (isYt) {
+        r = await fetch('/api/youtube-upload', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ url: item.youtubeUrl, shareId, author, title: item.title })
+        });
+      } else {
+        const fd = new FormData();
+        fd.append('shareId', shareId);
+        fd.append('author', author);
+        fd.append('title', item.title || item.file.name.replace(/\.[^.]+$/, ''));
+        fd.append('audio', item.file);
+        r = await fetch('/api/upload', { method: 'POST', body: fd });
+      }
+      const d = await r.json();
+      clearInterval(interval);
+      if (d.ok) {
+        item.status = 'ok'; item.pct = 100;
+        const dur = d.duration || item.duration || 0;
+        if (dur) { uploadedSeconds += dur; updateStorageBar(); }
+        // Rimuovi dalla coda dopo breve pausa
+        renderUploadQueue();
+        await sleep(1200);
+        fileList = fileList.filter(f => f.id !== item.id);
+      } else {
+        item.status = 'err'; item.msg = d.error || 'Errore sconosciuto'; allOk = false;
+      }
+    } catch (e) {
+      clearInterval(interval);
+      item.status = 'err'; item.msg = 'Errore di rete — controlla la connessione.'; allOk = false;
+    }
+
+    renderUploadQueue();
+    if (pending.indexOf(item) < pending.length - 1) await sleep(1500);
+  }
+
+  uploading = false;
+  checkCanProceed();
+
+  const upTitle = document.getElementById('up-title-text');
+  const spinner = upPanel.querySelector('.up-spinner');
+  if (allOk) {
+    if (spinner) spinner.style.display = 'none';
+    upTitle.textContent = '✅ Tutti i file caricati!';
+    await sleep(800);
+    if (isDesktop()) {
+      dtShowSuccess();
+    } else {
+      document.getElementById('main').querySelectorAll('.step-panel').forEach(p => p.classList.remove('active'));
+      document.getElementById('success-screen').classList.add('show');
+      document.getElementById('btn-next').style.display = 'none';
+      document.getElementById('btn-back').style.display = 'none';
+    }
+  } else {
+    if (spinner) spinner.style.display = 'none';
+    upTitle.textContent = 'Completato con errori';
+    // Show summary again so user can see what failed
+    document.getElementById('summary-card').style.display = '';
+  }
+}
+
+function renderUploadQueue() {
+  const el = document.getElementById('upload-queue');
+  el.innerHTML = fileList.map(item => {
+    let prog = '';
+    if (item.status === 'uploading') prog = `<div class="qitem-prog">
+      <div class="prog-bg"><div class="prog-fill" id="pf-${item.id}" style="width:${item.pct||0}%"></div></div>
+      <div class="prog-lbl" id="pl-${item.id}">${esc(item.msg)}</div></div>`;
+    else if (item.status === 'ok') prog = `<div class="qitem-prog"><div class="prog-lbl" style="color:var(--c-green)">✅ Caricato!</div></div>`;
+    else if (item.status === 'err') prog = `<div class="qitem-prog"><div class="prog-lbl" style="color:var(--c-red);white-space:normal;line-height:1.4">❌ ${esc(item.msg)}</div></div>`;
+    else prog = `<div class="qitem-prog"><div class="prog-lbl">In attesa…</div></div>`;
+
+    let st = '';
+    if (item.status === 'uploading') st = `<span class="st st-uploading"></span>`;
+    else if (item.status === 'ok') st = `<span class="st st-ok"></span>`;
+    else if (item.status === 'err') st = `<span class="st st-err"></span>`;
+
+    return `<div class="qitem no-drag" style="animation:none">
+      <span class="drag-handle" style="visibility:hidden">⠿</span>
+      <div class="qitem-info">
+        <div class="qitem-name">${esc(item.title || item.file.name)}</div>
+        <div class="qitem-meta">${item.isYoutube ? '▶️ YouTube' : (item.file.size/1024/1024).toFixed(1)+' MB'}${item.duration?' · '+fmtTime(item.duration):''}</div>
+      </div>
+      <div class="qitem-actions">${st}</div>
+      ${prog}
+    </div>`;
+  }).join('');
+}
+
+function resetForMore() {
+  fileList = []; uploading = false; uploadedSeconds = 0; nextId = 0;
+  ytInfo = null;
+  // mobile
+  document.getElementById('success-screen').classList.remove('show');
+  document.getElementById('btn-next').style.display = '';
+  document.getElementById('yt-preview-wrap').innerHTML = '';
+  document.getElementById('yt-url').value = '';
+  document.getElementById('yt-help').classList.remove('show');
+  // desktop
+  const dtSuccess = document.getElementById('dt-success');
+  const dtNormal = document.getElementById('dt-normal');
+  const dtProgress = document.getElementById('dt-progress');
+  if (dtSuccess) { dtSuccess.classList.remove('show'); }
+  if (dtNormal) dtNormal.style.display = '';
+  if (dtProgress) dtProgress.style.display = 'none';
+  renderQueue(); updateQueueCounter();
+  if (isDesktop()) {
+    dtUpdateRight();
+  } else {
+    showStep(2, 'back');
+  }
+}
+
+/* ══════════════════════════════════════════════════════
+   DESKTOP MODE
+══════════════════════════════════════════════════════ */
+function isDesktop() { return window.innerWidth >= 768; }
+
+function dtLinkChanged() {
+  // reset shareId if user edits the link
+  shareId = null;
+  document.getElementById('btn-verify').disabled = !document.getElementById('inp-link').value.trim();
+  dtUpdateRight();
+}
+
+function dtUpdateRight() {
+  if (!isDesktop()) return;
+
+  // link status
+  const sumLink = document.getElementById('dt-sum-link');
+  if (sumLink) {
+    sumLink.innerHTML = shareId
+      ? `<span style="color:var(--c-green2)">✓ …${shareId}</span>`
+      : `<span class="dt-status-empty">non verificato</span>`;
+  }
+
+  // author
+  const author = document.getElementById('inp-author')?.value.trim();
+  const sumAuthor = document.getElementById('dt-sum-author');
+  if (sumAuthor) {
+    sumAuthor.innerHTML = author
+      ? `<span>${esc(author)}</span>`
+      : `<span class="dt-status-empty">—</span>`;
+  }
+
+  // files
+  const sumCount = document.getElementById('dt-sum-count');
+  const filesList = document.getElementById('dt-files-list');
+  if (sumCount) {
+    const total = fileList.length;
+    const totalSec = fileList.filter(f=>f.duration).reduce((a,f)=>a+f.duration,0);
+    sumCount.innerHTML = total > 0
+      ? `${total} file${totalSec ? ' · ' + fmtMin(totalSec) : ''}`
+      : `<span class="dt-status-empty">nessun file</span>`;
+  }
+  if (filesList) {
+    filesList.innerHTML = fileList.map(f =>
+      `<div class="dt-file-item">
+        <span>${f.isYoutube ? '▶️' : '🎵'}</span>
+        <span class="dt-file-name">${esc(f.title || f.file.name)}</span>
+        ${f.duration ? `<span class="dt-file-dur">${fmtTime(f.duration)}</span>` : ''}
+      </div>`
+    ).join('');
+  }
+
+  // send button
+  const sendBtn = document.getElementById('dt-send-btn');
+  if (sendBtn) {
+    sendBtn.disabled = !shareId || fileList.length === 0 || !author || uploading;
+  }
+}
+
+function dtShowProgress() {
+  document.getElementById('dt-normal').style.display = 'none';
+  document.getElementById('dt-progress').style.display = 'block';
+}
+
+function dtShowSuccess() {
+  document.getElementById('dt-progress').style.display = 'none';
+  document.getElementById('dt-success').classList.add('show');
+}
+
+/* ══════════════════════════════════════════════════════
+   INIT
+══════════════════════════════════════════════════════ */
+function init() {
+  if (isDesktop()) {
+    // Show desktop layout, hide mobile step panels
+    document.getElementById('desktop-layout').style.display = 'grid';
+    dtUpdateRight();
+  } else {
+    showStep(1);
+  }
+}
+
+// Re-check on resize (e.g. tablet rotation)
+window.addEventListener('resize', () => {
+  const dl = document.getElementById('desktop-layout');
+  if (isDesktop()) {
+    dl.style.display = 'grid';
+    dtUpdateRight();
+  } else {
+    dl.style.display = 'none';
+    // restore mobile if needed
+    if (!document.querySelector('.step-panel.active')) showStep(1);
+  }
+});
+
+init();
+</script>
+</body>
+</html>
