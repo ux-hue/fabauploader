@@ -1245,31 +1245,24 @@ function updateStorageBar() {
 ══════════════════════════════════════════════════════ */
 const inpLink = document.getElementById('inp-link');
 
-// Estrae URL MyFaba da qualsiasi testo (es. messaggio condivisione Faba app)
 function extractFabaUrl(text) {
   const m = text.match(/https?:\/\/studio\.myfaba\.com\/record\/[A-Za-z0-9_-]+/);
   return m ? m[0] : null;
 }
 
-inpLink.addEventListener('paste', e => {
-  // Lascia fare il paste, poi pulisce dopo un tick
-  setTimeout(() => {
-    const val = inpLink.value;
-    const extracted = extractFabaUrl(val);
-    if (extracted && extracted !== val.trim()) {
-      inpLink.value = extracted;
-    }
-    document.getElementById('btn-verify').disabled = !inpLink.value.trim();
-    shareId = null;
-    checkCanProceed();
-  }, 0);
-});
-
-inpLink.addEventListener('input', () => {
+function onLinkChange() {
+  const val = inpLink.value;
+  const extracted = extractFabaUrl(val);
+  if (extracted && extracted !== val.trim()) {
+    inpLink.value = extracted;
+  }
   document.getElementById('btn-verify').disabled = !inpLink.value.trim();
   shareId = null;
   checkCanProceed();
-});
+}
+
+inpLink.addEventListener('paste', () => setTimeout(onLinkChange, 0));
+inpLink.addEventListener('input', onLinkChange);
 inpLink.addEventListener('keydown', e => e.key === 'Enter' && verifyLink());
 
 async function verifyLink() {
