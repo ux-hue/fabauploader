@@ -297,7 +297,6 @@ const RAPIDAPI_KEY = process.env.RAPIDAPI_KEY;
 const RAPIDAPI_HOST = 'youtube-mp3-audio-video-downloader.p.rapidapi.com';
 
 // Spicy-Laika YouTube MP3 Audio Video Downloader
-// GET /get_mp3_download_link/{videoId}?quality=low&wait_until_the_file_is_ready=true
 async function rapidApiGetMp3(videoId) {
   if (!RAPIDAPI_KEY) throw new Error('RAPIDAPI_KEY non configurata');
   const headers = { 'x-rapidapi-key': RAPIDAPI_KEY, 'x-rapidapi-host': RAPIDAPI_HOST };
@@ -307,12 +306,27 @@ async function rapidApiGetMp3(videoId) {
     { params: { quality: 'low', wait_until_the_file_is_ready: 'true' }, headers, timeout: 60_000 }
   );
   const d = r.data;
-  console.log(`[rapidapi] response:`, JSON.stringify(d).slice(0, 300));
+  console.log(`[rapidapi] response:`, JSON.stringify(d).slice(0, 200));
 
-  const mp3Url = d.downloadUrl || d.download_url || d.url || d.link || d.mp3;
+  // Campo URL può essere 'file', 'downloadUrl', 'url', 'link'
+  const mp3Url = d.file || d.downloadUrl || d.download_url || d.url || d.link;
   if (!mp3Url) throw new Error(`RapidAPI: nessun URL — ${JSON.stringify(d).slice(0, 100)}`);
 
-  return { title: d.title || d.videoTitle || 'Audio da YouTube', mp3Url };
+  // Il file potrebbe non essere ancora pronto — poll HEAD fino a 300s
+  console.log(`[rapidapi] polling URL: ${mp3Url.slice(0, 60)}`);
+  for (let i = 0; i < 30; i++) {
+    await new Promise(res => setTimeout(res, 10_000));
+    try {
+      const head = await axios.head(mp3Url, { timeout: 8_000 });
+      if (head.status === 200) {
+        console.log(`[rapidapi] file ready after ${(i+1)*10}s`);
+        return { title: d.title || d.videoTitle || 'Audio da YouTube', mp3Url };
+      }
+    } catch(e) {
+      console.log(`[rapidapi] poll ${i+1}: not ready yet (${e.response?.status || e.message})`);
+    }
+  }
+  throw new Error('RapidAPI: timeout — file non disponibile dopo 300s');
 }
 
 // Route: info video (usa oEmbed per titolo + thumbnail, veloce)
