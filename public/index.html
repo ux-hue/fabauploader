@@ -1251,28 +1251,26 @@ function extractFabaUrl(text) {
 }
 
 function onLinkChange(el) {
-  const field = el || document.getElementById('inp-link');
+  const field = el || [...document.querySelectorAll('#inp-link')].find(f => f.offsetParent !== null) || document.querySelector('#inp-link');
   const val = field.value;
   const extracted = extractFabaUrl(val);
   if (extracted && extracted !== val.trim()) {
     field.value = extracted;
   }
-  document.querySelectorAll('#btn-verify').forEach(b => b.disabled = !field.value.trim());
+  document.querySelectorAll('.btn-verify-link').forEach(b => b.disabled = !field.value.trim());
   shareId = null;
   checkCanProceed();
 }
 
-const inpLink = document.getElementById('inp-link');
-inpLink.addEventListener('paste', () => setTimeout(() => onLinkChange(inpLink), 0));
-inpLink.addEventListener('input', () => onLinkChange(inpLink));
-inpLink.addEventListener('keydown', e => e.key === 'Enter' && verifyLink());
-
 async function verifyLink() {
-  const url = inpLink.value.trim();
+  // Usa il campo visibile (offsetParent !== null = visibile nel DOM)
+  const allFields = [...document.querySelectorAll('#inp-link')];
+  const activeField = allFields.find(f => f.offsetParent !== null) || allFields[0];
+  const url = activeField.value.trim();
   if (!url) return;
-  const btn = document.getElementById('btn-verify');
+  const btns = document.querySelectorAll('.btn-verify-link');
   const lbl = document.getElementById('verify-lbl');
-  btn.disabled = true;
+  btns.forEach(b => b.disabled = true);
   lbl.innerHTML = '<span class="spin-sm"></span> Verifica…';
   document.getElementById('link-badge').innerHTML = '';
 
@@ -1303,7 +1301,7 @@ async function verifyLink() {
   }
 
   lbl.textContent = '🔗 Verifica link';
-  btn.disabled = !inpLink.value.trim();
+  btns.forEach(b => b.disabled = !activeField.value.trim());
 }
 
 /* ══════════════════════════════════════════════════════
@@ -1751,7 +1749,11 @@ function isDesktop() { return window.innerWidth >= 768; }
 function dtLinkChanged() {
   // reset shareId if user edits the link
   shareId = null;
-  document.getElementById('btn-verify').disabled = !document.getElementById('inp-link').value.trim();
+  const anyVal = [...document.querySelectorAll('#inp-link')].some(f => f.value.trim());
+  document.querySelectorAll('.btn-verify-link').forEach(b => b.disabled = !anyVal);
+  // Sync value to visible field
+  const visField = [...document.querySelectorAll('#inp-link')].find(f => f.offsetParent !== null);
+  if (visField) { const extracted = extractFabaUrl(visField.value); if (extracted && extracted !== visField.value.trim()) visField.value = extracted; }
   dtUpdateRight();
 }
 
