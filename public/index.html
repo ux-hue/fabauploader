@@ -764,7 +764,7 @@ html,body{
           <input class="inp" type="text" id="inp-link"
             placeholder="https://studio.myfaba.com/record/…"
             autocomplete="off" autocorrect="off" spellcheck="false"
-            onkeydown="if(event.key==='Enter')verifyLink()" oninput="dtLinkChanged()"/>
+            onkeydown="if(event.key==='Enter')verifyLink()" oninput="onLinkChange(this);dtLinkChanged()" onpaste="setTimeout(()=>onLinkChange(this),0)"/>
           <button class="btn-verify-link" id="btn-verify" style="margin-top:12px"
             onclick="verifyLink()" disabled>
             <span id="verify-lbl">🔗 Verifica link</span>
@@ -923,7 +923,8 @@ html,body{
     <input class="inp" type="text" id="inp-link"
       placeholder="https://studio.myfaba.com/record/…"
       autocomplete="off" autocorrect="off" spellcheck="false"
-      onkeydown="if(event.key==='Enter')verifyLink()"/>
+      onkeydown="if(event.key==='Enter')verifyLink()"
+      oninput="onLinkChange(this)" onpaste="setTimeout(()=>onLinkChange(this),0)"/>
 
     <button class="btn-verify-link" id="btn-verify" style="margin-top:14px"
       onclick="verifyLink()" disabled>
@@ -1243,26 +1244,27 @@ function updateStorageBar() {
 /* ══════════════════════════════════════════════════════
    STEP 1 — LINK
 ══════════════════════════════════════════════════════ */
-const inpLink = document.getElementById('inp-link');
 
 function extractFabaUrl(text) {
   const m = text.match(/https?:\/\/studio\.myfaba\.com\/record\/[A-Za-z0-9_-]+/);
   return m ? m[0] : null;
 }
 
-function onLinkChange() {
-  const val = inpLink.value;
+function onLinkChange(el) {
+  const field = el || document.getElementById('inp-link');
+  const val = field.value;
   const extracted = extractFabaUrl(val);
   if (extracted && extracted !== val.trim()) {
-    inpLink.value = extracted;
+    field.value = extracted;
   }
-  document.getElementById('btn-verify').disabled = !inpLink.value.trim();
+  document.querySelectorAll('#btn-verify').forEach(b => b.disabled = !field.value.trim());
   shareId = null;
   checkCanProceed();
 }
 
-inpLink.addEventListener('paste', () => setTimeout(onLinkChange, 0));
-inpLink.addEventListener('input', onLinkChange);
+const inpLink = document.getElementById('inp-link');
+inpLink.addEventListener('paste', () => setTimeout(() => onLinkChange(inpLink), 0));
+inpLink.addEventListener('input', () => onLinkChange(inpLink));
 inpLink.addEventListener('keydown', e => e.key === 'Enter' && verifyLink());
 
 async function verifyLink() {
