@@ -762,7 +762,7 @@ html,body{
           </p>
           <label class="field-label">Link</label>
           <input class="inp" type="text" id="inp-link"
-            placeholder="https://studio.myfaba.com/record/…"
+            placeholder="https://share.myfaba.com/r/…"
             autocomplete="off" autocorrect="off" spellcheck="false"
             onkeydown="if(event.key==='Enter')verifyLink()" oninput="onLinkChange(this);dtLinkChanged()"/>
           <button class="btn-verify-link" id="btn-verify" style="margin-top:12px"
@@ -921,7 +921,7 @@ html,body{
 
     <label class="field-label">Link d'invito</label>
     <input class="inp" type="text" id="inp-link"
-      placeholder="https://studio.myfaba.com/record/…"
+      placeholder="https://share.myfaba.com/r/…"
       autocomplete="off" autocorrect="off" spellcheck="false"
       onkeydown="if(event.key==='Enter')verifyLink()"
       oninput="onLinkChange(this)" onpaste="setTimeout(()=>onLinkChange(this),0)"/>
@@ -1246,7 +1246,7 @@ function updateStorageBar() {
 ══════════════════════════════════════════════════════ */
 
 function extractFabaUrl(text) {
-  const m = text.match(/https?:\/\/studio\.myfaba\.com\/record\/[A-Za-z0-9_-]+/);
+  const m = text.match(/https?:\/\/(?:share\.myfaba\.com\/r|studio\.myfaba\.com\/record)\/[A-Za-z0-9_-]+/);
   return m ? m[0] : null;
 }
 
@@ -1571,7 +1571,7 @@ function setPill(name) {
    STEP 4 — SUMMARY + SEND
 ══════════════════════════════════════════════════════ */
 function renderSummary() {
-  const shareLabel = shareId ? `…${shareId}` : '—';
+  const shareLabel = shareId ? `…${shareId.slice(-6)}` : '—';
   document.getElementById('sum-link').textContent = shareLabel;
   document.getElementById('sum-author').textContent = document.getElementById('inp-author')?.value.trim() || '—';
   const total = fileList.length;
@@ -1764,7 +1764,7 @@ function dtUpdateRight() {
   const sumLink = document.getElementById('dt-sum-link');
   if (sumLink) {
     sumLink.innerHTML = shareId
-      ? `<span style="color:var(--c-green2)">✓ …${shareId}</span>`
+      ? `<span style="color:var(--c-green2)">✓ …${shareId.slice(-6)}</span>`
       : `<span class="dt-status-empty">non verificato</span>`;
   }
 
