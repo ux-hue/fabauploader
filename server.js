@@ -35,76 +35,82 @@ const upload = multer({
   }
 });
 
-const BASE = 'https://studio.myfaba.com/record/';
 
 /* ── helpers ──────────────────────────────────────────────────────────────── */
 
+/** Accetta link nuovo (share.myfaba.com/r/ID) e vecchio (studio.myfaba.com/record/ID).
+ *  Ritorna l'URL completo normalizzato (usato come "shareId" opaco dal frontend). */
 function extractShareId(input = '') {
-  const m = input.match(/([A-Za-z0-9]{10})(?:[/?#].*)?$/);
-  return m ? m[1] : null;
+  const t = String(input);
+  let m = t.match(/https?:\/\/share\.myfaba\.com\/r\/([A-Za-z0-9_-]+)/);
+  if (m) return `https://share.myfaba.com/r/${m[1]}`;
+  m = t.match(/https?:\/\/studio\.myfaba\.com\/record\/([A-Za-z0-9_-]+)/);
+  if (m) return `https://studio.myfaba.com/record/${m[1]}`;
+  return null;
 }
 
-/** Step 1 – hit share URL, grab 302 cookies + redirect location */
-async function loadPage(shareId) {
-  const resp = await axios.get(`${BASE}${shareId}`, {
-    maxRedirects: 0,
-    validateStatus: s => s < 500,
-    headers: { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1' }
-  });
+const UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1';
 
-  // 404 / 410 / 200 (non-redirect) = link expired or invalid
-  if (resp.status === 403) throw new Error('STORAGE_FULL');
-  if (resp.status === 404 || resp.status === 410)
-    throw new Error('LINK_SCADUTO');
-  if (resp.status !== 302)
-    throw new Error('LINK_SCADUTO');
+/** Step 1+2 – segue i redirect a mano (max 8) tenendo i cookie, fino alla pagina col form */
+async function loadPage(shareUrl) {
+  const jar = {};
+  const addCookies = resp => {
+    for (const c of resp.headers['set-cookie'] || []) {
+      const [pair] = c.split(';');
+      const i = pair.indexOf('=');
+      if (i > 0) jar[pair.slice(0, i).trim()] = pair.slice(i + 1).trim();
+    }
+  };
+  const cookieHeader = () => Object.entries(jar).map(([k, v]) => `${k}=${v}`).join('; ');
 
-  let xsrf = null, sess = null;
-  for (const c of resp.headers['set-cookie'] || []) {
-    const x = c.match(/XSRF-TOKEN=([^;]+)/);
-    const s = c.match(/myfaba_cms_session=([^;]+)/);
-    if (x) xsrf = decodeURIComponent(x[1]);
-    if (s) sess = s[1];
+  let url = shareUrl;
+  for (let hop = 0; hop < 8; hop++) {
+    const resp = await axios.get(url, {
+      maxRedirects: 0,
+      validateStatus: s => s < 500,
+      headers: { 'User-Agent': UA, ...(Object.keys(jar).length ? { Cookie: cookieHeader() } : {}) }
+    });
+    addCookies(resp);
+    console.log(`[faba] hop ${hop} ${resp.status} ${url}`);
+
+    if (resp.status === 403) throw new Error('STORAGE_FULL');
+    if (resp.status === 404 || resp.status === 410) throw new Error('LINK_SCADUTO');
+
+    if (resp.status >= 300 && resp.status < 400) {
+      const loc = resp.headers['location'];
+      if (!loc) throw new Error('LINK_SCADUTO');
+      url = new URL(loc, url).toString();
+      continue;
+    }
+    if (resp.status === 200) {
+      const html = typeof resp.data === 'string' ? resp.data : String(resp.data);
+      const dom = new JSDOM(html);
+      if (dom.window.document.getElementById('form')) return { jar, cookie: cookieHeader(), html, pageUrl: url };
+      // pagina senza form: mostra indizi nei log per debug
+      console.log('[faba] pagina senza #form:', html.slice(0, 300).replace(/\s+/g, ' '));
+      throw new Error('LINK_SCADUTO');
+    }
+    throw new Error('LINK_SCADUTO');
   }
-  const location = resp.headers['location'];
-  if (!xsrf || !sess || !location) throw new Error('LINK_SCADUTO');
-  return { xsrf, sess, location };
+  throw new Error('LINK_SCADUTO');
 }
 
-/** Step 2 – follow redirect, parse form */
-async function fetchForm(xsrf, sess, location) {
-  const cookie = `XSRF-TOKEN=${encodeURIComponent(xsrf)}; myfaba_cms_session=${sess}`;
-  const resp = await axios.get(location, {
-    headers: { Cookie: cookie, 'User-Agent': 'Mozilla/5.0' }
-  });
-
-  const dom  = new JSDOM(resp.data);
-  const doc  = dom.window.document;
+/** Estrae dal form: action, token, scadenza */
+async function fetchForm(page) {
+  const doc  = new JSDOM(page.html).window.document;
   const form = doc.getElementById('form');
   if (!form) throw new Error('LINK_SCADUTO');
 
-  const actionUrl = form.getAttribute('action');
+  const actionRaw = form.getAttribute('action');
   const tokenEl   = doc.querySelector('input[name="_token"]');
-  if (!actionUrl || !tokenEl) throw new Error('Token CSRF non trovato.');
+  if (!actionRaw || !tokenEl) throw new Error('Token CSRF non trovato.');
+  const actionUrl = new URL(actionRaw, page.pageUrl).toString();
 
   const parsed = new URL(actionUrl);
   const expires = parsed.searchParams.get('expires');
   const expiresMs = expires ? parseInt(expires) * 1000 : null;
 
-  // Try to extract storage data — Faba doesn't currently expose this in the page HTML,
-  // so usedSeconds/maxSeconds will be null for now.
-  let usedSeconds = null, maxSeconds = null;
-  try {
-    const scripts = [...doc.querySelectorAll('script:not([src])')].map(s => s.textContent);
-    for (const src of scripts) {
-      const mUsed = src.match(/"(?:used_duration|usedDuration|current_duration)"\s*:\s*(\d+)/);
-      const mMax  = src.match(/"(?:max_duration|maxDuration|total_duration|limit)"\s*:\s*(\d+)/);
-      if (mUsed) usedSeconds = parseInt(mUsed[1]);
-      if (mMax)  maxSeconds  = parseInt(mMax[1]);
-    }
-  } catch(e) { /* non-fatal */ }
-
-  return { actionUrl, _token: tokenEl.value, cookie, expiresMs, usedSeconds, maxSeconds };
+  return { actionUrl, _token: tokenEl.value, cookie: page.cookie, expiresMs, usedSeconds: null, maxSeconds: null };
 }
 
 /** Convert any audio → WAV (22050 Hz mono, pcm_s16le) to keep file small */
@@ -161,7 +167,7 @@ async function uploadWav(actionUrl, cookie, _token, wavBuf, author, title) {
   const resp = await axios.post(actionUrl, fd, {
     headers: { ...fd.getHeaders(), Cookie: cookie,
       'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Safari/604.1',
-      Referer: 'https://studio.myfaba.com/' },
+      Referer: 'https://share.myfaba.com/' },
     maxContentLength: Infinity,
     maxBodyLength: Infinity,
     timeout: 120_000,
@@ -377,8 +383,8 @@ app.post('/api/youtube-upload', async (req, res) => {
     });
 
     console.log(`[yt] WAV: ${(wavBuf.length/1024/1024).toFixed(1)} MB`);
-    const { xsrf, sess, location } = await loadPage(shareId);
-    const { actionUrl, _token, cookie } = await fetchForm(xsrf, sess, location);
+    const page = await loadPage(shareId);
+    const { actionUrl, _token, cookie } = await fetchForm(page);
     const { duration } = await uploadWav(actionUrl, cookie, _token, wavBuf, author, title);
     res.json({ ok: true, duration });
 
@@ -396,11 +402,11 @@ app.post('/api/youtube-upload', async (req, res) => {
 // Validate link
 app.post('/api/validate', async (req, res) => {
   const shareId = extractShareId(req.body.url || '');
-  if (!shareId) return res.status(400).json({ ok: false, error: 'URL non valido. Deve essere del tipo https://studio.myfaba.com/record/XXXXXXXXXX' });
+  if (!shareId) return res.status(400).json({ ok: false, error: 'URL non valido. Deve essere del tipo https://share.myfaba.com/r/XXXXXXXXXX' });
 
   try {
-    const { xsrf, sess, location } = await loadPage(shareId);
-    const { expiresMs, usedSeconds, maxSeconds } = await fetchForm(xsrf, sess, location);
+    const page = await loadPage(shareId);
+    const { expiresMs, usedSeconds, maxSeconds } = await fetchForm(page);
 
     let expiresLabel = null;
     if (expiresMs) {
@@ -421,8 +427,8 @@ app.post('/api/upload', upload.single('audio'), async (req, res) => {
     return res.status(400).json({ ok: false, error: 'Dati mancanti.' });
 
   try {
-    const { xsrf, sess, location } = await loadPage(shareId);
-    const { actionUrl, _token, cookie } = await fetchForm(xsrf, sess, location);
+    const page = await loadPage(shareId);
+    const { actionUrl, _token, cookie } = await fetchForm(page);
 
     const isWav = /\.wav$/i.test(req.file.originalname);
     const wavBuf = isWav ? req.file.buffer : await convertToWav(req.file.buffer, req.file.originalname);
