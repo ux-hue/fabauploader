@@ -446,4 +446,44 @@ app.post('/api/upload', upload.single('audio'), async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
+
+/* ── DEBUG temporaneo: analizza il nuovo flusso Faba (da rimuovere dopo) ───── */
+app.get('/api/faba-debug', async (req, res) => {
+  try {
+    const shareUrl = extractShareId(req.query.url || '');
+    if (!shareUrl) return res.status(400).type('text').send('url mancante');
+    const jar = {}; let url = shareUrl, html = '', out = [];
+    const ck = () => Object.entries(jar).map(([k, v]) => `${k}=${v}`).join('; ');
+    for (let i = 0; i < 8; i++) {
+      const r = await axios.get(url, { maxRedirects: 0, validateStatus: s => s < 600,
+        headers: { 'User-Agent': UA, ...(Object.keys(jar).length ? { Cookie: ck() } : {}) } });
+      for (const c of r.headers['set-cookie'] || []) { const [p] = c.split(';'); const j = p.indexOf('='); if (j > 0) jar[p.slice(0, j)] = p.slice(j + 1); }
+      out.push(`HOP ${i} ${r.status} ${url.replace(/token=[^&]+/, 'token=…')}`);
+      if (r.status >= 300 && r.status < 400) { url = new URL(r.headers.location, url).toString(); continue; }
+      html = String(r.data); break;
+    }
+    out.push('COOKIES: ' + Object.keys(jar).join(', '));
+    out.push('HTML length: ' + html.length);
+    // testo visibile + indizi nel payload Next
+    const text = html.replace(/<script[\s\S]*?<\/script>/g, ' ').replace(/<style[\s\S]*?<\/style>/g, ' ').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 600);
+    out.push('TESTO PAGINA: ' + text);
+    const inline = (html.match(/<script>[\s\S]*?<\/script>/g) || []).join('\n').replace(/token":"[^"]+/g, 'token":"…');
+    const hints = inline.match(/[^"\\]{0,60}(upload|record|audio|api\/|expires|signed|presign|storage|bucket)[^"\\]{0,80}/gi) || [];
+    out.push('INDIZI NEL PAYLOAD (' + hints.length + '):\n' + [...new Set(hints)].slice(0, 60).join('\n'));
+    const chunks = [...new Set((html.match(/\/_next\/static\/chunks\/[A-Za-z0-9_.\-~]+\.js/g) || []))];
+    out.push('CHUNKS: ' + chunks.length);
+    const base = new URL(url).origin;
+    for (const c of chunks) {
+      try {
+        const js = (await axios.get(base + c, { headers: { 'User-Agent': UA }, timeout: 15000 })).data;
+        const src = typeof js === 'string' ? js : JSON.stringify(js);
+        const m = src.match(/[^"'`\n]{0,70}(\/api\/[A-Za-z0-9_\-\/\.\$\{\}]+|upload[A-Za-z]*|\/invites\/[^"'`]{0,60}|FormData|multipart)[^"'`\n]{0,70}/gi) || [];
+        const u = [...new Set(m)].slice(0, 25);
+        if (u.length) out.push(`\n# ${c}\n` + u.join('\n'));
+      } catch (e) { out.push(`# ${c} errore ${e.message}`); }
+    }
+    res.type('text').send(out.join('\n'));
+  } catch (e) { res.status(500).type('text').send('ERR ' + e.message); }
+});
+
 app.listen(PORT, () => console.log(`🎵 Faba Uploader → http://localhost:${PORT}`));
