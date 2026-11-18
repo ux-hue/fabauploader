@@ -762,9 +762,9 @@ html,body{
           </p>
           <label class="field-label">Link</label>
           <input class="inp" type="text" id="inp-link"
-            placeholder="https://studio.myfaba.com/record/…"
+            placeholder="https://share.myfaba.com/r/…"
             autocomplete="off" autocorrect="off" spellcheck="false"
-            onkeydown="if(event.key==='Enter')verifyLink()" oninput="onLinkChange(this);dtLinkChanged()" onpaste="setTimeout(()=>onLinkChange(this),0)"/>
+            onkeydown="if(event.key==='Enter')verifyLink()" oninput="onLinkChange(this);dtLinkChanged()"/>
           <button class="btn-verify-link" id="btn-verify" style="margin-top:12px"
             onclick="verifyLink()" disabled>
             <span id="verify-lbl">🔗 Verifica link</span>
@@ -921,7 +921,7 @@ html,body{
 
     <label class="field-label">Link d'invito</label>
     <input class="inp" type="text" id="inp-link"
-      placeholder="https://studio.myfaba.com/record/…"
+      placeholder="https://share.myfaba.com/r/…"
       autocomplete="off" autocorrect="off" spellcheck="false"
       onkeydown="if(event.key==='Enter')verifyLink()"
       oninput="onLinkChange(this)" onpaste="setTimeout(()=>onLinkChange(this),0)"/>
@@ -1246,12 +1246,12 @@ function updateStorageBar() {
 ══════════════════════════════════════════════════════ */
 
 function extractFabaUrl(text) {
-  const m = text.match(/https?:\/\/studio\.myfaba\.com\/record\/[A-Za-z0-9_-]+/);
+  const m = text.match(/https?:\/\/(?:share\.myfaba\.com\/r|studio\.myfaba\.com\/record)\/[A-Za-z0-9_-]+/);
   return m ? m[0] : null;
 }
 
 function onLinkChange(el) {
-  const field = el || document.getElementById('inp-link');
+  const field = el || [...document.querySelectorAll('#inp-link')].find(f => f.offsetParent !== null) || document.querySelector('#inp-link');
   const val = field.value;
   const extracted = extractFabaUrl(val);
   if (extracted && extracted !== val.trim()) {
@@ -1262,22 +1262,17 @@ function onLinkChange(el) {
   checkCanProceed();
 }
 
-const inpLink = document.getElementById('inp-link');
-inpLink.addEventListener('paste', () => setTimeout(() => onLinkChange(inpLink), 0));
-inpLink.addEventListener('input', () => onLinkChange(inpLink));
-inpLink.addEventListener('keydown', e => e.key === 'Enter' && verifyLink());
-
 async function verifyLink() {
-  // Legge dal campo che ha un valore (mobile o desktop)
-  const allFields = document.querySelectorAll('#inp-link');
-  const activeField = [...allFields].find(f => f.value.trim()) || allFields[0];
+  const allFields = [...document.querySelectorAll('#inp-link')];
+  const activeField = allFields.find(f => f.offsetParent !== null) || allFields[0];
   const url = activeField.value.trim();
   if (!url) return;
   const btns = document.querySelectorAll('.btn-verify-link');
   const lbl = document.getElementById('verify-lbl');
   btns.forEach(b => b.disabled = true);
   lbl.innerHTML = '<span class="spin-sm"></span> Verifica…';
-  document.getElementById('link-badge').innerHTML = '';
+  // Aggiorna tutti i badge (mobile e desktop)
+  document.querySelectorAll('#link-badge').forEach(b => b.innerHTML = '');
 
   try {
     const r = await fetch('/api/validate', {
@@ -1291,18 +1286,18 @@ async function verifyLink() {
       storageMax = d.maxSeconds;
       uploadedSeconds = 0;
       const exp = d.expiresLabel ? ` — scade ${d.expiresLabel}` : '';
-      document.getElementById('link-badge').innerHTML =
-        `<div class="badge ok">✅ Link valido${exp}</div>`;
+      document.querySelectorAll('#link-badge').forEach(b => b.innerHTML =
+        `<div class="badge ok">✅ Link valido${exp}</div>`);
       updateStorageBar();
       checkCanProceed();
       dtUpdateRight();
     } else {
-      document.getElementById('link-badge').innerHTML =
-        `<div class="badge err">❌ ${esc(d.error)}</div>`;
+      document.querySelectorAll('#link-badge').forEach(b => b.innerHTML =
+        `<div class="badge err">❌ ${esc(d.error)}</div>`);
     }
   } catch (e) {
-    document.getElementById('link-badge').innerHTML =
-      `<div class="badge err">❌ Errore di rete</div>`;
+    document.querySelectorAll('#link-badge').forEach(b => b.innerHTML =
+      `<div class="badge err">❌ Errore di rete</div>`);
   }
 
   lbl.textContent = '🔗 Verifica link';
@@ -1576,7 +1571,7 @@ function setPill(name) {
    STEP 4 — SUMMARY + SEND
 ══════════════════════════════════════════════════════ */
 function renderSummary() {
-  const shareLabel = shareId ? `…${shareId}` : '—';
+  const shareLabel = shareId ? `…${shareId.slice(-6)}` : '—';
   document.getElementById('sum-link').textContent = shareLabel;
   document.getElementById('sum-author').textContent = document.getElementById('inp-author')?.value.trim() || '—';
   const total = fileList.length;
@@ -1756,6 +1751,9 @@ function dtLinkChanged() {
   shareId = null;
   const anyVal = [...document.querySelectorAll('#inp-link')].some(f => f.value.trim());
   document.querySelectorAll('.btn-verify-link').forEach(b => b.disabled = !anyVal);
+  // Sync value to visible field
+  const visField = [...document.querySelectorAll('#inp-link')].find(f => f.offsetParent !== null);
+  if (visField) { const extracted = extractFabaUrl(visField.value); if (extracted && extracted !== visField.value.trim()) visField.value = extracted; }
   dtUpdateRight();
 }
 
@@ -1766,7 +1764,7 @@ function dtUpdateRight() {
   const sumLink = document.getElementById('dt-sum-link');
   if (sumLink) {
     sumLink.innerHTML = shareId
-      ? `<span style="color:var(--c-green2)">✓ …${shareId}</span>`
+      ? `<span style="color:var(--c-green2)">✓ …${shareId.slice(-6)}</span>`
       : `<span class="dt-status-empty">non verificato</span>`;
   }
 
